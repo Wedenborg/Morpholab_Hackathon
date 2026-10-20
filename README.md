@@ -32,7 +32,10 @@
   - Can we define gene importance through the worst-case effect of not measuring that gene?
   - What is the smallest set of genes whose removal makes the biological state unrecoverable?
 
-## Data set suggestions:
-Pick a few developmental biology datasets where there’s a notion of space measured across multiple samples
-https://www.cell.com/cell/fulltext/S0092-8674(25)00622-1
+## Datasets
 
+- [Digital reconstruction of full embryos during early
+mouse organogenesis](https://www.cell.com/action/showPdf?pii=S0092-8674%2825%2900622-1) 
+    - Data at: [https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE278603](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE278603)
+    - At the bottom is the "Supplementary Files" section with the file `GSE278603_RAW.tar`. This tarball contains the 6 sample files.
+    - TODO: details and a script to open this data
