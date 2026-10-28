@@ -36,6 +36,6 @@
 
 - [Digital reconstruction of full embryos during early
 mouse organogenesis](https://www.cell.com/action/showPdf?pii=S0092-8674%2825%2900622-1) 
-    - Data at: [https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE278603](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE278603)
-    - At the bottom is the "Supplementary Files" section with the file `GSE278603_RAW.tar`. This tarball contains the 6 sample files.
-    - TODO: details and a script to open this data
+    - Data at: [https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE278603](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE278603), at the bottom is the "Supplementary Files" section with the file `GSE278603_RAW.tar`. This tarball contains the 6 sample files.
+    - The data is also on the Insomnia server if you have access to that, in the folder `/insomnia001/depts/morpheus/users/wg2492/GSE278603_RAW/`
+    - A basic script to load the `.h5ad` files with AnnData is [mouse_embryo.py](mouse_embryo.py).
