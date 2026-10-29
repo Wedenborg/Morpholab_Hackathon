@@ -1,7 +1,13 @@
+import argparse
 import pathlib
+import sys
 
 import anndata as ad
 import torch
+
+# Benchmark and data helpers live in eval_team/ (see eval_team/README.md):
+#   load_e75_inputs, measure, evaluate_reconstruction, run_and_evaluate, ...
+from eval_team import evaluate_reconstruction, load_e75_inputs, measure, run_and_evaluate  # noqa: F401
 
 
 def explore_data(data_dir: pathlib.Path) -> None:
@@ -122,6 +128,21 @@ def random_method(
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--evaluate", action="store_true",
+                        help="run random_method on the real E7.5 embryos and score it with the eval-team benchmark")
+    parser.add_argument("--rounds", type=int, default=3)
+    args = parser.parse_args()
+    if args.evaluate:
+        summary = run_and_evaluate(random_method, n_rounds=args.rounds)
+        keys = ["n_experiments", "n_genes_measured", "peng_spearman", "atlas_spearman",
+                "celltype_tv", "celltype_balanced_accuracy", "heldout_corr"]
+        for k in keys:
+            print(f"{k:28s} {summary[k]}")
+        for k in ["peng_spearman", "atlas_spearman", "celltype_tv", "celltype_balanced_accuracy"]:
+            print(f"{k + ' (true data)':28s} {summary[k + '_true_data']}")
+        sys.exit(0)
+
     folder = pathlib.Path("../GSE278603_RAW")
 
     n_genes_per_round = 4
