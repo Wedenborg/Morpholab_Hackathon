@@ -267,13 +267,13 @@ class RegionBenchmark:
     def score(self, recon):
         """Score a reconstruction (AnnData or cells x genes DataFrame indexed by cell name).
         Returns (summary dict, per-gene DataFrame). For each external reference the summary
-        also gives the score of the true data ("<ref>_true_data") and the reconstruction's
-        score divided by it ("<ref>_relative"), which can exceed 1."""
+        also gives the score of the true data ("<ref>_spearman_true_data") and the reconstruction's
+        score divided by it ("<ref>_spearman_relative"), which can exceed 1."""
         summary, per_gene = self._score(recon)
         for name in self.refs:
             c = self.true_data[f"{name}_spearman"]
-            summary[f"{name}_true_data"] = c
-            summary[f"{name}_relative"] = summary[f"{name}_spearman"] / c if c > 0 else np.nan
+            summary[f"{name}_spearman_true_data"] = c
+            summary[f"{name}_spearman_relative"] = summary[f"{name}_spearman"] / c if c > 0 else np.nan
         return summary, per_gene
 
 

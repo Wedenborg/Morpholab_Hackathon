@@ -6,7 +6,9 @@ Run with:  python -m unittest test_region_benchmark -v     (or: python -m pytest
 Synthetic tests need nothing downloaded. Tests on the real E7.5 embryos are skipped when
 the data or the reference tables (prepare_references.py) are missing.
 """
+import importlib.util
 import pathlib
+import sys
 import tempfile
 import unittest
 import warnings
@@ -157,7 +159,7 @@ class TestBenchmarkSynthetic(unittest.TestCase):
         self.assertGreater(s["peng_spearman"], 0.9)
         self.assertGreater(s["atlas_spearman"], 0.9)
         self.assertAlmostEqual(s["truth_region_spearman"], 1.0)
-        self.assertAlmostEqual(s["peng_relative"], 1.0)
+        self.assertAlmostEqual(s["peng_spearman_relative"], 1.0)
         self.assertEqual(s["peng_n_groups"], 8)
         self.assertEqual(len(per_gene), len(self.truth.var_names))
 
@@ -388,6 +390,42 @@ class TestRealE75(unittest.TestCase):
         self.assertGreater(s["heldout_corr"], 0.02)
         self.assertLess(s["heldout_corr"], 0.5)
         self.assertGreater(s["peng_spearman"], 0.3)
+
+
+@unittest.skipUnless(_real_available() and importlib.util.find_spec("torch") is not None,
+                     "needs torch and the E7.5 data")
+class TestMouseEmbryoHooks(unittest.TestCase):
+    """The functions in mouse_embryo.py that connect a method to this benchmark."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+        import mouse_embryo
+        cls.me = mouse_embryo
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cls.hidden = mouse_embryo.load_embryo(2)
+
+    def test_measure_fills_true_values_and_logs_each_section(self):
+        import torch
+        oracle = MeasurementOracle(self.hidden)
+        genes = pd.Index(self.hidden.var_names)
+        idx = [genes.get_loc(g) for g in ["T", "Otx2", "Ttr", "Mesp1", "Sox2"]]
+        out = self.me.measure(oracle, genes, torch.tensor(idx), torch.zeros(self.hidden.shape))
+        np.testing.assert_allclose(out[:, idx].numpy(), self.hidden.X[:, idx].toarray(), atol=1e-6)
+        others = np.setdiff1d(np.arange(out.shape[1]), idx)
+        self.assertEqual(int((out[:, others] != 0).sum()), 0)          # nothing else filled
+        n_sections = self.hidden.obs["z"].nunique()
+        self.assertEqual(len(oracle.log()), 2 * n_sections)            # 5 genes = 2 experiments per section
+
+    def test_evaluate_reconstruction_on_true_tensor(self):
+        import torch
+        tensor = torch.from_numpy(self.hidden.X.toarray().astype(np.float32))
+        s, _ = self.me.evaluate_reconstruction(tensor, self.hidden)
+        self.assertAlmostEqual(s["peng_spearman"], s["peng_spearman_true_data"], places=4)
+        self.assertAlmostEqual(s["celltype_tv"], s["celltype_tv_true_data"], places=4)
+        with self.assertRaises(ValueError):
+            self.me.evaluate_reconstruction(tensor[:, :-1], self.hidden)
 
 
 if __name__ == "__main__":

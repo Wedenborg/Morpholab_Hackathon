@@ -85,6 +85,36 @@ Report benchmarks 1 and 3 together. Benchmark 1 rewards a copy of another embryo
 - **`truth_region_spearman`.** This correlates the reconstruction's region averages directly with the hidden embryo's own measured averages.
 - **`heldout_corr`.** Without a log, this is computed over every neighbourhood, measured ones included. It can't tell predicted values from measured values passed through unchanged. Supply `--log` to restrict it to unmeasured genes.
 
+## Calling the benchmark from `mouse_embryo.py`
+
+`mouse_embryo.py` at the repo root wraps everything a method needs:
+
+```python
+from mouse_embryo import load_e75_inputs, measure, evaluate_reconstruction, run_and_evaluate
+
+inp = load_e75_inputs()               # hidden = E7.5 rep2, visible = E7.5 rep1
+# inp["locations"]          (N, 3) tensor of x, y, z of the hidden embryo's cells
+# inp["gene_log_counts"]    (N, G) zeros, filled by measure()
+# inp["sc_gene_log_counts"] [(N', G)] the visible embryo, genes in the same order
+# inp["oracle"]             measurement interface for the hidden embryo
+# inp["genes"]              gene names, the order of the G axis
+
+measured = measure(inp["oracle"], inp["genes"], gene_indices, inp["gene_log_counts"])
+summary, tables = evaluate_reconstruction(imputed, inp["hidden"], inp["oracle"].log())
+```
+
+- **`measure`** writes the true values of the chosen genes into a copy of the tensor. It measures every section, one experiment per section per 4 genes, so all of it is logged.
+- **`evaluate_reconstruction`** takes any (N, G) torch tensor or NumPy array in the hidden embryo's cell and gene order and returns the scores described below. The log is optional. Benchmarks 1 and 3 don't use it.
+- **`run_and_evaluate(method)`** runs a method with the same signature as `random_method` for a few rounds, measuring its picks after each round. It then scores the final reconstruction: the last imputation with all measured values filled in.
+
+From the command line:
+
+```
+python mouse_embryo.py --evaluate --rounds 3
+```
+
+Without `--evaluate` the script runs the original toy example. `random_method` scores about 0 on every benchmark, because it predicts 0 for every gene it hasn't measured. The printout lists each score next to the true data's score for comparison.
+
 ## What a method gets and returns
 
 A method only touches the hidden embryo through `submission.MeasurementOracle`:
