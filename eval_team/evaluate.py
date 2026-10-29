@@ -17,7 +17,7 @@ Every score is also computed on the true data ("..._true_data") where that is me
 The true data is a reference point, not an upper bound.
 
 Usage:
-    python evaluate.py --truth <hidden .h5ad> --recon <recon .h5ad> --log <experiments .csv> \
+    python -m eval_team.evaluate --truth <hidden .h5ad> --recon <recon .h5ad> --log <experiments .csv> \
                        [--out-dir results/]
 """
 import argparse
@@ -29,10 +29,10 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-from region_benchmark import REF_DIR, RegionBenchmark, canonical_celltype
-from spatial_scores import (celltype_proportion_score, heldout_gene_score, neighbourhood_bins,
+from .region_benchmark import REF_DIR, RegionBenchmark, canonical_celltype
+from .spatial_scores import (celltype_proportion_score, heldout_gene_score, neighbourhood_bins,
                             sparsity_summary)
-from submission import check_log, measured_mask
+from .submission import check_log, measured_mask
 
 
 class Evaluator:
@@ -82,7 +82,7 @@ class Evaluator:
 
 def main():
     import anndata as ad
-    from submission import load_log
+    from .submission import load_log
     warnings.filterwarnings("ignore")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--truth", required=True)

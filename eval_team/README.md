@@ -1,5 +1,7 @@
 # E7.5 reconstruction benchmark
 
+`eval_team` is a Python package. Run everything from the repo root, either by importing it (`from eval_team import ...`) or with `python -m eval_team.<module>`.
+
 A method designs experiments on a hidden E7.5 Stereo-seq embryo. Each experiment measures up to 4 genes on one section or on a chosen set of cells. From those measurements the method reconstructs the expression of every gene in every cell. The benchmark scores the reconstruction in three ways:
 
 - **Plausibility.** Do the genes' patterns across anatomical regions and cell types match published E7.5 data? The references are Peng et al. 2019 Geo-seq, GEO accession GSE120963, and the Pijuan-Sala et al. 2019 scRNA-seq atlas.
@@ -11,12 +13,11 @@ A method designs experiments on a hidden E7.5 Stereo-seq embryo. Each experiment
 The Stereo-seq files are expected in `GSE278603_RAW/` next to the repo, as for `mouse_embryo.py`. The reference tables are built once:
 
 ```
-cd eval-team
-python prepare_references.py              # Peng (4 MB) and the atlas (1.7 GB download)
-python prepare_references.py --skip-atlas # Peng only
+python -m eval_team.prepare_references              # Peng (4 MB) and the atlas (1.7 GB download)
+python -m eval_team.prepare_references --skip-atlas # Peng only
 ```
 
-Tables go to `reference_data/` next to the repo, or to `$MORPHO_REF_DIR` if set.
+Tables go to `reference_data/` next to the repo, or to `$MORPHO_REF_DIR` if set. The data folder can be moved the same way with `$MORPHO_DATA_DIR`.
 
 ## Scoring a reconstructed tensor
 
@@ -34,7 +35,7 @@ To turn a NumPy array whose rows and columns follow the hidden file's order into
 
 ```python
 import anndata as ad, pandas as pd
-hidden = ad.read_h5ad("../../GSE278603_RAW/GSM9046244_Embryo_E7.5_stereo_rep2.h5ad")
+hidden = ad.read_h5ad("../GSE278603_RAW/GSM9046244_Embryo_E7.5_stereo_rep2.h5ad")
 recon = ad.AnnData(X=tensor,                                   # shape (hidden.n_obs, hidden.n_vars)
                    obs=pd.DataFrame(index=hidden.obs_names),
                    var=pd.DataFrame(index=hidden.var_names))
@@ -44,15 +45,14 @@ recon.write_h5ad("reconstruction.h5ad")
 **3. Score it.** Omit `--log`:
 
 ```
-cd eval-team
-python evaluate.py --truth ../../GSE278603_RAW/GSM9046244_Embryo_E7.5_stereo_rep2.h5ad \
+python -m eval_team.evaluate --truth ../GSE278603_RAW/GSM9046244_Embryo_E7.5_stereo_rep2.h5ad \
                    --recon reconstruction.h5ad --out-dir results/
 ```
 
 Or from Python, where a cells × genes `pandas.DataFrame` also works:
 
 ```python
-from evaluate import Evaluator
+from eval_team import Evaluator
 summary, tables = Evaluator(hidden).evaluate(recon)
 ```
 
@@ -87,10 +87,10 @@ Report benchmarks 1 and 3 together. Benchmark 1 rewards a copy of another embryo
 
 ## Calling the benchmark from `mouse_embryo.py`
 
-`mouse_embryo.py` at the repo root wraps everything a method needs:
+`mouse_embryo.py` at the repo root imports what a method needs from `eval_team/harness.py`:
 
 ```python
-from mouse_embryo import load_e75_inputs, measure, evaluate_reconstruction, run_and_evaluate
+from eval_team import load_e75_inputs, measure, evaluate_reconstruction, run_and_evaluate
 
 inp = load_e75_inputs()               # hidden = E7.5 rep2, visible = E7.5 rep1
 # inp["locations"]          (N, 3) tensor of x, y, z of the hidden embryo's cells
@@ -105,7 +105,7 @@ summary, tables = evaluate_reconstruction(imputed, inp["hidden"], inp["oracle"].
 
 - **`measure`** writes the true values of the chosen genes into a copy of the tensor. It measures every section, one experiment per section per 4 genes, so all of it is logged.
 - **`evaluate_reconstruction`** takes any (N, G) torch tensor or NumPy array in the hidden embryo's cell and gene order and returns the scores described below. The log is optional. Benchmarks 1 and 3 don't use it.
-- **`run_and_evaluate(method)`** runs a method with the same signature as `random_method` for a few rounds, measuring its picks after each round. It then scores the final reconstruction: the last imputation with all measured values filled in.
+- **`run_and_evaluate(method)`** runs a method with the same signature as `mouse_embryo.random_method` for a few rounds, measuring its picks after each round. It then scores the final reconstruction: the last imputation with all measured values filled in.
 
 From the command line:
 
@@ -120,7 +120,7 @@ Without `--evaluate` the script runs the original toy example. `random_method` s
 A method only touches the hidden embryo through `submission.MeasurementOracle`:
 
 ```python
-from submission import MeasurementOracle
+from eval_team import MeasurementOracle
 oracle = MeasurementOracle(hidden_adata)        # the benchmark creates this
 oracle.cells                                    # cell names with x, y, z; no labels
 oracle.genes                                    # the gene library
@@ -138,12 +138,12 @@ The benchmark reads the log to tell measured values from predicted ones. The bud
 ## Running the evaluation
 
 ```
-python evaluate.py --truth ../../GSE278603_RAW/GSM9046244_Embryo_E7.5_stereo_rep2.h5ad \
+python -m eval_team.evaluate --truth ../GSE278603_RAW/GSM9046244_Embryo_E7.5_stereo_rep2.h5ad \
                    --recon reconstruction.h5ad --log experiments.csv --out-dir results/
 ```
 
 ```python
-from evaluate import Evaluator
+from eval_team import Evaluator
 summary, tables = Evaluator(hidden_adata).evaluate(recon_adata, log_dataframe)
 ```
 
@@ -154,7 +154,7 @@ The evaluation writes `summary.json` and three per-gene tables: region scores, h
 `dummy_method.py` stands in for the method team. It produces a real submission through the oracle:
 
 ```
-python dummy_method.py --hidden-rep 2 --visible-rep 1 --sets 8 --genes markers --out-dir my_dummy/
+python -m eval_team.dummy_method --hidden-rep 2 --visible-rep 1 --sets 8 --genes markers --out-dir my_dummy/
 ```
 
 It runs one experiment per section, and sections take turns through `--sets` sets of 4 genes. The genes are cell-type markers of the visible embryo, its most variable genes, or random genes. Each hidden cell gets the average profile of the visible-embryo cells closest to it on its section's 4 measured genes. Cells tied at the k-th distance are all included, since many cells read zero on all 4 genes. Measured values are passed through unchanged.
@@ -187,7 +187,7 @@ Every score uses only genes detected in at least 2% of the embryo's cells. Genes
 
 ## Sanity checks
 
-`python sanity_checks.py` runs every score on reconstructions whose quality is known in advance. It takes about 5 minutes. The hidden embryo here is rep2, and the visible embryo is rep1:
+`python -m eval_team.sanity_checks` runs every score on reconstructions whose quality is known in advance. It takes about 5 minutes. The hidden embryo here is rep2, and the visible embryo is rep1:
 
 | Reconstruction | Peng | Atlas | Truth regions | Held-out | Cell-type TV | Balanced acc. |
 |---|---|---|---|---|---|---|
@@ -222,7 +222,7 @@ With rep1 hidden, the pattern is the same. The script prints both.
 ## Tests
 
 ```
-python -m unittest test_region_benchmark -v
+python -m unittest discover -s eval_team -t . -v
 ```
 
 There are 26 tests. The synthetic ones build a three-layer ring embryo with known regions. They cover the oracle and its limits, the experiment log, the regions under rotation, the held-out score with measured neighbourhoods excluded, the proportion score and the evaluator end to end. The tests on the two real E7.5 embryos check three things. Marker genes must land in the right regions, with T posterior and Otx2 and Sox2 anterior. Shuffled data must score near 0 and thinner data lower. The dummy method's submission must be valid, and its measured values must pass through unchanged. These tests are skipped when the data or the reference tables are missing.

@@ -14,7 +14,7 @@ matters because many cells read zero on all 4 genes). The cell gets their averag
 profile over the whole gene library. Measured values replace predictions where they exist.
 
 Usage:
-    python dummy_method.py --hidden-rep 2 --visible-rep 1 --sets 8 --out-dir dummy_rep2_8sets
+    python -m eval_team.dummy_method --hidden-rep 2 --visible-rep 1 --sets 8 --out-dir dummy_rep2_8sets
 writes reconstruction.h5ad and experiments.csv.
 """
 import argparse
@@ -27,14 +27,8 @@ import pandas as pd
 import scipy.sparse as sp
 from scipy.spatial.distance import cdist
 
-from submission import K_MAX, MeasurementOracle
-
-DATA = pathlib.Path(__file__).resolve().parent.parent.parent / "GSE278603_RAW"
-
-
-def load(rep, stage="E7.5"):
-    return ad.read_h5ad(next(DATA.glob(f"*_Embryo_{stage}_stereo_rep{rep}.h5ad")))
-
+from .harness import load_embryo as load
+from .submission import K_MAX, MeasurementOracle
 
 def choose_gene_sets(visible, library, n_sets, how="markers", seed=0, k=K_MAX):
     genes = pd.Index(visible.var_names).intersection(library)

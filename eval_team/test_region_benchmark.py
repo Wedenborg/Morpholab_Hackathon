@@ -1,14 +1,13 @@
 """Tests for the eval-team benchmark: region scores, held-out gene score, cell-type
 proportions, the measurement oracle and experiment log, and the dummy method.
 
-Run with:  python -m unittest test_region_benchmark -v     (or: python -m pytest)
+Run from the repo root:  python -m unittest discover -s eval_team -t . -v
 
 Synthetic tests need nothing downloaded. Tests on the real E7.5 embryos are skipped when
 the data or the reference tables (prepare_references.py) are missing.
 """
 import importlib.util
 import pathlib
-import sys
 import tempfile
 import unittest
 import warnings
@@ -18,15 +17,15 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-from evaluate import Evaluator
-from region_benchmark import (REF_DIR, RegionBenchmark, assign_regions, canonical_celltype,
+from eval_team.evaluate import Evaluator
+from eval_team.paths import DATA_DIR as DATA
+from eval_team.region_benchmark import (REF_DIR, RegionBenchmark, assign_regions, canonical_celltype,
                               group_means, peng_region_table, peng_sample_regions, rowwise_spearman)
-from spatial_scores import (celltype_proportion_score, heldout_gene_score, neighbourhood_bins,
+from eval_team.spatial_scores import (celltype_proportion_score, heldout_gene_score, neighbourhood_bins,
                             sparsity_summary)
-from submission import MeasurementOracle, check_log, load_log, measured_mask
+from eval_team.submission import MeasurementOracle, check_log, load_log, measured_mask
 
 warnings.filterwarnings("ignore")
-DATA = pathlib.Path(__file__).resolve().parent.parent.parent / "GSE278603_RAW"
 REGIONS8 = ["ecto_A", "ecto_AL", "ecto_PL", "ecto_P", "meso_A", "meso_P", "endo_A", "endo_P"]
 PENG_SAMPLES = {"ecto_A": "4A", "ecto_AL": "4L1", "ecto_PL": "4R2", "ecto_P": "4P",
                 "meso_A": "5MA", "meso_P": "5MP", "endo_A": "5EA", "endo_P": "5EP"}
@@ -362,7 +361,7 @@ class TestRealE75(unittest.TestCase):
                 self.assertLess(abs(s0[k]), 0.1, f"rep{rep} {k}")
 
     def test_shallower_data_scores_lower(self):
-        from sanity_checks import thinned
+        from eval_team.sanity_checks import thinned
         a = self.emb[2]
         bench = RegionBenchmark(a)
         scores = [bench.score(a)[0]] + [bench.score(thinned(a, p))[0] for p in (0.5, 0.2, 0.05)]
@@ -372,7 +371,7 @@ class TestRealE75(unittest.TestCase):
 
 
     def test_dummy_method_submission(self):
-        import dummy_method
+        from eval_team import dummy_method
         hidden, visible = self.emb[2], self.emb[1]
         oracle = MeasurementOracle(hidden)
         recon, log = dummy_method.run(oracle, visible, n_sets=4, how="markers")
@@ -394,17 +393,16 @@ class TestRealE75(unittest.TestCase):
 
 @unittest.skipUnless(_real_available() and importlib.util.find_spec("torch") is not None,
                      "needs torch and the E7.5 data")
-class TestMouseEmbryoHooks(unittest.TestCase):
-    """The functions in mouse_embryo.py that connect a method to this benchmark."""
+class TestHarness(unittest.TestCase):
+    """eval_team.harness: the functions mouse_embryo.py uses to run and score a method."""
 
     @classmethod
     def setUpClass(cls):
-        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-        import mouse_embryo
-        cls.me = mouse_embryo
+        from eval_team import harness
+        cls.me = harness
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            cls.hidden = mouse_embryo.load_embryo(2)
+            cls.hidden = harness.load_embryo(2)
 
     def test_measure_fills_true_values_and_logs_each_section(self):
         import torch

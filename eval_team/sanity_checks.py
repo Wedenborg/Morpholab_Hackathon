@@ -19,10 +19,9 @@ know in advance:
 Every case is scored with the full evaluator (evaluate.py). Cases without an experiment
 log count every value as predicted.
 
-Usage: python sanity_checks.py [--out results.csv]
+Usage: python -m eval_team.sanity_checks [--out results.csv]
 """
 import argparse
-import pathlib
 import sys
 import warnings
 
@@ -32,16 +31,14 @@ import pandas as pd
 import scipy.sparse as sp
 from sklearn.neighbors import NearestNeighbors
 
-import dummy_method
-from evaluate import Evaluator
-from region_benchmark import assign_regions
-from submission import MeasurementOracle
-
-DATA = pathlib.Path(__file__).resolve().parent.parent.parent / "GSE278603_RAW"
-
+from . import dummy_method
+from .evaluate import Evaluator
+from .harness import load_embryo
+from .region_benchmark import assign_regions
+from .submission import MeasurementOracle
 
 def load(rep):
-    return ad.read_h5ad(next(DATA.glob(f"*_Embryo_E7.5_stereo_rep{rep}.h5ad")))
+    return load_embryo(rep)
 
 
 def with_X(a, X):

@@ -8,25 +8,22 @@
    stages. The full matrix is never loaded into memory.
 
 Usage:
-    python prepare_references.py            # both references
-    python prepare_references.py --skip-atlas
+    python -m eval_team.prepare_references            # both references
+    python -m eval_team.prepare_references --skip-atlas
 
 Files are written to $MORPHO_REF_DIR (default: ../../reference_data relative to this file,
 i.e. next to the repo, outside git).
 """
 import argparse
-import os
 import pathlib
 import subprocess
 import sys
 import tarfile
-import urllib.request
 
 import numpy as np
 import pandas as pd
 
-HERE = pathlib.Path(__file__).resolve().parent
-REF_DIR = pathlib.Path(os.environ.get("MORPHO_REF_DIR", HERE.parent.parent / "reference_data"))
+from .paths import REF_DIR
 
 PENG_URL = ("https://ftp.ncbi.nlm.nih.gov/geo/series/GSE120nnn/GSE120963/suppl/"
             "GSE120963_E7.5_Ref_all.combine.gene.fpkm.txt.gz")

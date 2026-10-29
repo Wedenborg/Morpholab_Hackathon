@@ -25,11 +25,10 @@ Input scale: the same as the h5ad files' X, i.e. log1p of counts. Any per-gene m
 rescaling of the averages leaves the scores unchanged.
 
 Usage:
-    python region_benchmark.py --truth <hidden embryo .h5ad> --recon <reconstruction .h5ad>
+    python -m eval_team.region_benchmark --truth <hidden embryo .h5ad> --recon <reconstruction .h5ad>
 """
 import argparse
 import json
-import os
 import pathlib
 import warnings
 
@@ -38,8 +37,7 @@ import pandas as pd
 import scipy.sparse as sp
 from scipy.stats import rankdata
 
-HERE = pathlib.Path(__file__).resolve().parent
-REF_DIR = pathlib.Path(os.environ.get("MORPHO_REF_DIR", HERE.parent.parent / "reference_data"))
+from .paths import REF_DIR
 
 # Cell types that belong to the embryo proper at E7.5. Everything else in the Stereo-seq
 # labels is extra-embryonic or lines the outside of the conceptus (ExE tissues, yolk-sac
