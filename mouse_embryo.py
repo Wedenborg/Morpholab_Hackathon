@@ -70,6 +70,19 @@ def explore_data(data_dir: pathlib.Path) -> None:
         print(adata)
 
 
+def get_locations(adata: ad.AnnData) -> torch.Tensor:
+    """
+    The x, y, z coordinates of every cell.
+
+    args:
+        adata: one embryo, observations are cells
+
+    returns:
+        array of shape (N, 3), row i is cell i of adata
+    """
+    return torch.tensor(adata.obs[["x", "y", "z"]].to_numpy(), dtype=torch.float32)
+
+
 def random_method(
     n_genes_per_round: int,
     gene_embeddings: torch.Tensor,
@@ -254,16 +267,17 @@ if __name__ == "__main__":
 
     n_genes_per_round = 4
     G = 10
-    D = 3
     d = 128
-    N = 20
     N_prime = 25
     n_sc_datasets = 3
     n_rounds = 2
 
+    adata = ad.io.read_h5ad(sorted(folder.glob("*.h5ad"))[0])
+    locations = get_locations(adata)
+    N = len(locations)
+
     gene_embeddings = torch.ones(G, d)
     gene_similarity = gene_embeddings.T @ gene_embeddings
-    locations = torch.ones(N, D)
     gene_log_counts = torch.zeros(N, G)
     sc_gene_log_counts = [
         torch.arange(N_prime * G).reshape(N_prime, G) for _ in range(n_sc_datasets)
