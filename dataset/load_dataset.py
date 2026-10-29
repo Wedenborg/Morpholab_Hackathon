@@ -1,4 +1,5 @@
 import argparse
+import gzip
 import json
 from pathlib import Path
 import re
@@ -50,6 +51,41 @@ DOWNLOADS = {
         for stage in ("E9.5", "E11.5") for tissue in ("embryo", "heart")
     ],
 }
+
+
+def convert_gene_names(adata):
+    """Convert gene IDs to unique symbols in place, preserving original IDs."""
+    if "gene_id" not in adata.var:
+        adata.var["gene_id"] = list(adata.var_names)
+    symbols = pd.Series(list(adata.var_names), index=adata.var_names)
+    for column in ("gene_symbol", "gene_symbols", "symbol"):
+        if column in adata.var:
+            symbols = symbols.where(~symbols.str.startswith("ENSMUSG"), adata.var[column].fillna(symbols))
+    unresolved = symbols.str.startswith("ENSMUSG")
+    if unresolved.any():
+        url = "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M25/gencode.vM25.annotation.gtf.gz"
+        annotation = DATA_DIR / "annotations" / url.rsplit("/", 1)[1]
+        annotation.parent.mkdir(parents=True, exist_ok=True)
+        if not annotation.exists():
+            partial = annotation.with_name(annotation.name + ".part")
+            urlretrieve(url, partial)
+            partial.replace(annotation)
+        mapping = {}
+        with gzip.open(annotation, "rt") as handle:
+            for line in handle:
+                if line.startswith("#"):
+                    continue
+                fields = line.rstrip().split("\t")
+                if len(fields) == 9 and fields[2] == "gene":
+                    attributes = dict(re.findall(r'(\w+) "([^"]*)"', fields[8]))
+                    mapping[attributes["gene_id"].split(".")[0]] = attributes["gene_name"]
+        symbols.loc[unresolved] = symbols.loc[unresolved].map(
+            lambda name: mapping.get(name.split(".")[0], name)
+        )
+    duplicates = symbols.str.upper().duplicated(keep=False)
+    symbols.loc[duplicates] = adata.var_names[duplicates]
+    adata.var_names = pd.Index(symbols)
+    return adata
 
 
 def _normalize(name):
@@ -225,7 +261,9 @@ def _discover(folder):
     for path in sorted(folder.rglob("*")):
         if path.is_file() and path.suffix.lower() in (".h5ad", ".h5td", ".loom", ".rds", ".rdata", ".rda"):
             relative = path.relative_to(folder)
-            samples[str(relative.with_suffix(""))] = {"path": str(relative)}
+            name = str(relative.with_suffix(""))
+            if name not in samples or path.suffix.lower() == ".h5ad":
+                samples[name] = {"path": str(relative)}
     if samples:
         return samples
     for path in sorted(folder.rglob("*matrix.mtx*")):
@@ -341,7 +379,14 @@ def load_dataset(dataset_name="seu-3d", output="anndata", timepoint=None):
         )
     datasets = {}
     for sample, spec in samples.items():
-        adata = _read_sample(folder, spec)
+        adata = convert_gene_names(_read_sample(folder, spec))
+        if name == "tome" and "logcounts" in adata.layers:
+            counts = sparse.csr_matrix(adata.X)
+            logcounts = sparse.csr_matrix(adata.layers["logcounts"])
+            if (counts != logcounts).nnz == 0 and np.all(counts.data >= 0) and np.all(counts.data == np.floor(counts.data)):
+                logcounts = counts.astype(float, copy=True)
+                logcounts.data = np.log1p(logcounts.data)
+                adata.layers["logcounts"] = logcounts
         if output == "arrays":
             datasets[sample] = adata.X.toarray() if sparse.issparse(adata.X) else np.asarray(adata.X)
         else:

@@ -4,6 +4,7 @@ import sys
 
 import anndata as ad
 import torch
+from preprocessing.dataset_selection import select_dataset
 
 # Benchmark and data helpers live in eval_team/ (see eval_team/README.md):
 #   load_e75_inputs, measure, evaluate_reconstruction, run_and_evaluate, ...
@@ -132,6 +133,7 @@ if __name__ == "__main__":
     parser.add_argument("--evaluate", action="store_true",
                         help="run random_method on the real E7.5 embryos and score it with the eval-team benchmark")
     parser.add_argument("--rounds", type=int, default=3)
+    parser.add_argument("--verbose", action="store_true", help="show dataset selection progress")
     args = parser.parse_args()
     if args.evaluate:
         summary = run_and_evaluate(random_method, n_rounds=args.rounds)
@@ -146,31 +148,32 @@ if __name__ == "__main__":
     folder = pathlib.Path("../GSE278603_RAW")
 
     n_genes_per_round = 4
-    G = 10
     d = 128
-    N_prime = 25
-    n_sc_datasets = 3
     n_rounds = 2
 
     adata = ad.io.read_h5ad(sorted(folder.glob("*.h5ad"))[0])
+    gene_names = list(adata.var_names)
     locations = get_locations(adata)
     N = len(locations)
 
-    gene_embeddings = torch.ones(G, d)
-    gene_similarity = gene_embeddings.T @ gene_embeddings
+    dataset = select_dataset(adata, genes = "random", reference_genes=gene_names, d=d, top_n_var_genes = None, n_random_genes=4, seed =42, verbose=args.verbose) # This is assuming we do not change dataset each iteration. Currently no searching only uses TOME dataset at tau = 7.5
+    sc_gene_embeddings = torch.tensor(dataset["loadings"].to_numpy(), dtype=torch.float32)
+    sc_gene_similarity = torch.tensor(dataset["gene_similarity"].to_numpy(), dtype=torch.float32)
+    sc_gene_log_counts = [torch.tensor(dataset["gene_log_counts"].to_numpy(), dtype=torch.float32)]
+    gene_names = dataset["common_gene_names"]
+    G = len(gene_names)
     gene_log_counts = torch.zeros(N, G)
-    sc_gene_log_counts = [
-        torch.arange(N_prime * G).reshape(N_prime, G) for _ in range(n_sc_datasets)
-    ]
-
-    for _ in range(n_rounds):
+    
+    for _ in range(n_rounds): 
         choice, gene_log_counts = random_method(
             n_genes_per_round,
-            gene_embeddings,
-            gene_similarity,
+            sc_gene_embeddings,
+            sc_gene_similarity,
             locations,
             gene_log_counts,
             sc_gene_log_counts,
         )
 
+        nonzero_genes = (gene_log_counts != 0).any(dim=0).nonzero(as_tuple=True)[0]
+        print("Nonzero genes:", [gene_names[i] for i in nonzero_genes.tolist()])
         print(gene_log_counts)

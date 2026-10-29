@@ -1,18 +1,17 @@
 import argparse
-import gzip
 from pathlib import Path
 import re
 import sys
-from urllib.request import urlretrieve
 
 import anndata as ad
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import FactorAnalysis
+from tqdm.auto import tqdm
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from dataset.load_dataset import load_dataset
+from dataset.load_dataset import convert_gene_names, load_dataset
 
 
 REFERENCE_DATASETS = [
@@ -20,38 +19,24 @@ REFERENCE_DATASETS = [
         "dataset": "tome",
         "timepoint": "7.5",
         "layer": "logcounts",
-        "gene_annotation_url": "https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M25/gencode.vM25.annotation.gtf.gz",
-        "gene_map": {
-            "SHH": "ENSMUSG00000002633",
-            "SOX2": "ENSMUSG00000074637",
-            "HOXA1": "ENSMUSG00000029844",
-            "PMP22": "ENSMUSG00000018217",
-        },
     },
 ]
 
 
 def _load_samples(dataset, timepoint=None):
     if isinstance(dataset, ad.AnnData):
-        return {"input": dataset}
+        return {"input": convert_gene_names(dataset.copy())}
     if Path(dataset).is_file():
-        return {Path(dataset).stem: ad.read_h5ad(dataset)}
+        return {Path(dataset).stem: convert_gene_names(ad.read_h5ad(dataset))}
     return load_dataset(str(dataset), timepoint=timepoint, output="anndata")
 
 
-def _panel_expression(samples, genes, layer=None, gene_map=None):
-    gene_map = {key.upper(): value for key, value in (gene_map or {}).items()}
+def _panel_expression(samples, genes, layer=None):
     frames = []
     for adata in samples.values():
-        names = pd.Series(adata.var_names, index=adata.var_names.str.upper())
-        if not names.index.is_unique:
-            raise ValueError("Gene identifiers must be unique, ignoring case.")
-        identifiers = [
-            gene.upper() if gene.upper() in names.index
-            else gene_map.get(gene.upper(), gene).upper()
-            for gene in genes
-        ]
-        expression = adata[:, names.loc[identifiers].tolist()].to_df(layer=layer)
+        aliases = _reference_aliases(adata)
+        identifiers = [aliases[_gene_key(gene)] for gene in genes]
+        expression = adata[:, identifiers].to_df(layer=layer)
         expression.columns = genes
         frames.append(expression)
     return pd.concat(frames, ignore_index=True)
@@ -62,46 +47,23 @@ def _gene_key(name):
     return re.sub(r"\.\d+$", "", name) if name.startswith("ENS") else name
 
 
-def _reference_aliases(adata, reference, requested):
+def _reference_aliases(adata):
     aliases = {}
 
     def add_alias(symbol, identifier):
         aliases.setdefault(_gene_key(symbol), set()).add(identifier)
 
-    identifiers = {_gene_key(name): name for name in adata.var_names}
     for name in adata.var_names:
         add_alias(name, name)
-    for column in ("gene_symbol", "gene_symbols", "symbol"):
+    for column in ("gene_symbol", "gene_symbols", "symbol", "gene_id", "reference_gene_id"):
         if column in adata.var:
             for identifier, symbol in adata.var[column].dropna().items():
                 add_alias(symbol, identifier)
-    for symbol, identifier in reference.get("gene_map", {}).items():
-        if _gene_key(identifier) in identifiers:
-            add_alias(symbol, identifiers[_gene_key(identifier)])
-    if reference.get("gene_annotation_url") and any(_gene_key(gene) not in aliases for gene in requested):
-        url = reference["gene_annotation_url"]
-        annotation = ROOT / "dataset" / "data" / "annotations" / url.rsplit("/", 1)[1]
-        annotation.parent.mkdir(parents=True, exist_ok=True)
-        if not annotation.exists():
-            partial = annotation.with_name(annotation.name + ".part")
-            urlretrieve(url, partial)
-            partial.replace(annotation)
-        with gzip.open(annotation, "rt") as handle:
-            for line in handle:
-                if line.startswith("#"):
-                    continue
-                fields = line.rstrip().split("\t")
-                if len(fields) != 9 or fields[2] != "gene":
-                    continue
-                attributes = dict(re.findall(r'(\w+) "([^"]*)"', fields[8]))
-                identifier = identifiers.get(_gene_key(attributes["gene_id"]))
-                if identifier is not None:
-                    add_alias(attributes["gene_name"], identifier)
     return {symbol: next(iter(ids)) for symbol, ids in aliases.items() if len(ids) == 1}
 
 
 def select_dataset(
-    user_dataset,
+    adata,
     genes=None,
     reference_datasets=None,
     d=256,
@@ -110,37 +72,38 @@ def select_dataset(
     input_layer=None,
     output_dir=None,
     reference_genes=None,
+    verbose=False,
+    top_n_var_genes=None,
+    n_random_genes=None,
+    seed=None,
 ):
-    """Rank references on the input panel; fit the selected reference gene set.
+    """Select the reference closest to the input panel's gene correlations.
 
-    user_dataset is an AnnData object, an h5ad path, or a loader dataset name.
-    genes defaults to all genes in the first input sample. References are dicts
-    with dataset, optional timepoint, layer, and symbol-to-ID gene_map fields;
-    dataset accepts the same inputs as user_dataset. All references must contain
-    the complete panel. The score is mean absolute Pearson-correlation difference
-    over unique off-diagonal pairs, using all cells and the specified layers.
-    reference_genes optionally restricts every reference sample before ranking
-    and fitting, preserving the requested order. Names match var_names ignoring
-    case or resolve through gene_map, var gene symbols, or gene_annotation_url.
-    Keep the unambiguously mapped intersection across reference samples, labelled
-    with the requested input names. The retained set must include the input panel.
-    None starts with the full reference gene set. Genes constant in the sampled
-    reference cells are removed before similarity and factor analysis.
+    Accepts AnnData, an h5ad path, or a dataset name. `genes` defaults to all
+    input genes; `reference_genes` restricts reference genes by mapped names.
+    `genes="random"` samples `n_random_genes` input genes without replacement.
+    `seed` controls gene and cell sampling; None uses fresh randomness.
+    Samples up to `n_cells`, removes constant genes, and optionally retains
+    `top_n_var_genes` mean-normalized HVGs (Seurat; requires log1p expression).
 
-    Return reference, score, correlation (panel genes x panel genes), and loadings
-    (selected reference genes x d). Also return gene_set_name (dataset/timepoint),
-    gene_names (ordered, aligned gene names), gene_log_counts (sampled cells x genes),
-    and gene_similarity (retained-reference Pearson correlation, genes x genes).
-    excluded_reference_genes reports unmapped/ambiguous genes; constant_genes
-    reports genes removed for zero variance. reference_gene_ids preserves IDs.
-    Factor analysis samples up to n_cells without
-    replacement with seed 42, using the reference layer without variance scaling.
-    If a reference pools samples, factor analysis uses their shared gene set.
-    output_dir optionally saves gene_correlation.csv and gene_loadings.csv.
+    Returns a dict with reference/score, panel correlation, all input gene names,
+    and `common_gene_names` for retained reference genes aligned with the outputs:
+    log counts (cells x genes), similarity (genes x genes), loadings (genes x d),
+    and gene-filtering metadata. `verbose` prints progress; `output_dir` saves
+    panel correlations and loadings as CSVs.
     """
-    samples = _load_samples(user_dataset, timepoint)
+    if verbose:
+        print("Loading input dataset...", flush=True)
+    samples = _load_samples(adata, timepoint)
+    input_gene_names = list(adata.var_names) if isinstance(adata, ad.AnnData) else list(next(iter(samples.values())).var_names)
     if genes is None:
         genes = list(next(iter(samples.values())).var_names)
+    elif isinstance(genes, str) and genes == "random":
+        if n_random_genes is None:
+            raise ValueError('Set n_random_genes when genes="random".')
+        genes = np.random.default_rng(seed).choice(
+            next(iter(samples.values())).var_names, size=n_random_genes, replace=False,
+        )
     genes = list(genes)
     if len(genes) < 2 or len({gene.upper() for gene in genes}) != len(genes):
         raise ValueError("Provide at least two distinct panel genes.")
@@ -148,6 +111,8 @@ def select_dataset(
         raise ValueError("d and n_cells must be positive.")
     if reference_genes is not None:
         reference_genes = list(reference_genes)
+    if verbose:
+        print(f"Computing input correlations for {len(genes)} panel genes...", flush=True)
     input_correlation = _panel_expression(samples, genes, input_layer).corr()
     pairs = np.triu_indices(len(genes), k=1)
     input_pairs = input_correlation.to_numpy()[pairs]
@@ -157,38 +122,48 @@ def select_dataset(
     references = REFERENCE_DATASETS if reference_datasets is None else reference_datasets
     best = None
     best_samples = None
-    for reference in references:
+    for reference in tqdm(references, desc="Reference datasets", disable=not verbose):
+        if verbose:
+            print(f"Loading reference {reference['dataset']} (timepoint={reference.get('timepoint')})...", flush=True)
         reference_samples = _load_samples(reference["dataset"], reference.get("timepoint"))
         excluded_reference_genes = []
         if reference_genes is not None:
+            if verbose:
+                print("Mapping reference genes...", flush=True)
             aliases = {
-                sample: _reference_aliases(adata, reference, reference_genes)
-                for sample, adata in reference_samples.items()
+                sample: _reference_aliases(adata)
+                for sample, adata in tqdm(reference_samples.items(), desc="Mapping samples", disable=not verbose, leave=False)
             }
-            shared_genes = [gene for gene in reference_genes if all(
+            shared_genes = [gene for gene in tqdm(reference_genes, desc="Matching genes", disable=not verbose, leave=False) if all(
                 _gene_key(gene) in mapping for mapping in aliases.values()
             )]
-            excluded_reference_genes = [gene for gene in reference_genes if gene not in shared_genes]
+            excluded_reference_genes = [gene for gene in tqdm(reference_genes, desc="Checking excluded genes", disable=not verbose, leave=False) if gene not in shared_genes]
             if not shared_genes:
                 raise ValueError(f"No shared mapped genes for {reference['dataset']}.")
             filtered_samples = {}
-            for sample, adata in reference_samples.items():
+            for sample, adata in tqdm(reference_samples.items(), desc="Filtering samples", disable=not verbose, leave=False):
                 selected_names = [aliases[sample][_gene_key(gene)] for gene in shared_genes]
                 if len(set(selected_names)) != len(selected_names):
                     raise ValueError("reference_genes must resolve to distinct reference genes.")
                 filtered = adata[:, selected_names].copy()
-                filtered.var["reference_gene_id"] = selected_names
+                filtered.var["reference_gene_id"] = filtered.var["gene_id"].to_numpy()
                 filtered.var_names = shared_genes
                 filtered_samples[sample] = filtered
             reference_samples = filtered_samples
+            if verbose:
+                print(f"Retained {len(shared_genes)} reference genes; excluded {len(excluded_reference_genes)}.", flush=True)
+        if verbose:
+            print("Computing reference panel correlations...", flush=True)
         expression = _panel_expression(
-            reference_samples, genes, reference.get("layer"), reference.get("gene_map"),
+            reference_samples, genes, reference.get("layer"),
         )
         correlation = expression.corr()
         reference_pairs = correlation.to_numpy()[pairs]
         if not np.isfinite(reference_pairs).all():
             raise ValueError(f"Undefined panel correlations for reference {reference['dataset']}.")
         score = float(np.mean(np.abs(input_pairs - reference_pairs)))
+        if verbose:
+            print(f"Reference score: {score:.6g}", flush=True)
         if best is None or score < best["score"]:
             best = {
                 "reference": reference, "score": score, "correlation": correlation,
@@ -203,18 +178,40 @@ def select_dataset(
         reference_samples, join="inner", merge="same",
     )
     sample_size = min(n_cells, selected.n_obs)
-    indices = np.random.default_rng(42).choice(selected.n_obs, size=sample_size, replace=False)
+    indices = np.random.default_rng(seed).choice(selected.n_obs, size=sample_size, replace=False)
     expression = selected[indices, :].to_df(layer=best["reference"].get("layer"))
     variable_genes = expression.max(axis=0) > expression.min(axis=0)
     best["constant_genes"] = expression.columns[~variable_genes].tolist()
     expression = expression.loc[:, variable_genes]
     selected = selected[:, variable_genes.to_numpy()]
+    if top_n_var_genes is not None:
+        import scanpy as sc
+
+        if verbose:
+            print(f"Selecting top {top_n_var_genes} mean-normalized highly variable genes...", flush=True)
+        hvg = sc.pp.highly_variable_genes(
+            ad.AnnData(expression), n_top_genes=top_n_var_genes,
+            flavor="seurat", inplace=False,
+        )
+        retained_genes = hvg["dispersions_norm"].nlargest(top_n_var_genes).index
+        aliases = _reference_aliases(selected)
+        panel_ids = {gene: aliases.get(_gene_key(gene)) for gene in genes}
+        missing_genes = [gene for gene, identifier in panel_ids.items() if identifier not in retained_genes]
+        if missing_genes:
+            print(f"Warning: panel genes outside the top {top_n_var_genes} HVGs: {', '.join(missing_genes)}. Adding those available after constant-gene filtering.", flush=True)
+        retained_genes = retained_genes.union(
+            [identifier for identifier in panel_ids.values() if identifier is not None],
+            sort=False,
+        )
+        expression = expression.loc[:, expression.columns.isin(retained_genes)]
+        selected = selected[:, expression.columns]
     if selected.n_vars < 2 or d > min(sample_size, selected.n_vars):
         raise ValueError("Need at least two variable genes, and d cannot exceed the sampled cell or variable gene count.")
-    best["gene_names"] = list(selected.var_names)
+    best["gene_names"] = input_gene_names
+    best["common_gene_names"] = list(selected.var_names)
     best["reference_gene_ids"] = (
         selected.var["reference_gene_id"].tolist()
-        if "reference_gene_id" in selected.var else list(selected.var_names)
+        if "reference_gene_id" in selected.var else selected.var["gene_id"].tolist()
     )
     reference_name = best["reference"]["dataset"]
     if isinstance(reference_name, ad.AnnData):
@@ -224,12 +221,16 @@ def select_dataset(
     if reference_timepoint is not None:
         best["gene_set_name"] += f":{reference_timepoint}"
     best["gene_log_counts"] = expression
+    if verbose:
+        print(f"Selected {best['gene_set_name']}: {sample_size} cells, {selected.n_vars} variable genes; computing similarity...", flush=True)
     best["gene_similarity"] = pd.DataFrame(
         np.corrcoef(expression.to_numpy(), rowvar=False, dtype=np.float32),
         index=pd.Index(selected.var_names, name="gene_id"),
         columns=selected.var_names,
     )
     model = FactorAnalysis(n_components=d, copy=True)
+    if verbose:
+        print(f"Fitting factor analysis with {d} components...", flush=True)
     model.fit(expression)
     best["loadings"] = pd.DataFrame(
         model.components_.T,
@@ -241,6 +242,8 @@ def select_dataset(
         output_dir.mkdir(parents=True, exist_ok=True)
         best["correlation"].to_csv(output_dir / "gene_correlation.csv", index_label="gene")
         best["loadings"].to_csv(output_dir / "gene_loadings.csv")
+    if verbose:
+        print("Dataset selection complete.", flush=True)
     return best
 
 
