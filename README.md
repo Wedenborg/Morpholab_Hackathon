@@ -1,5 +1,70 @@
 
-# Hackathon! 
+# Fieldnote — Gene panel planner
+
+A local research prototype for preparing a gene panel for the next measurement round of a spatial transcriptomics experiment. The interface validates uploaded AnnData files, reports exact overlap, selects a reproducible random panel, and clearly separates synthetic demo evaluation from facts about uploaded data.
+
+## Run locally
+
+Requirements: Python 3.11+ and Node.js 20+ with npm.
+
+In one terminal, install and start the API:
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+In a second terminal, install and start the React app:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open the Vite URL (normally `http://127.0.0.1:5173`). The frontend API URL defaults to `http://127.0.0.1:8000`; set `VITE_API_URL` at build time to use another API origin.
+
+Set `GENE_PANEL_MAX_UPLOAD_MB` to change the per-file upload limit (default 250 MB), `GENE_PANEL_DATA_DIR` to change temporary storage, and `GENE_PANEL_SESSION_TTL_SECONDS` to change the idle-session retention period (default 24 hours). Uploads are written to generated per-session directories, are not sent to external data services, and are removed after the session expires and a subsequent API request triggers cleanup, or when the session is explicitly deleted. Session IDs are unguessable capabilities; run the API on a trusted local network.
+
+## Input schema and mappings
+
+Both inputs must be readable `.h5ad` files with AnnData's observations × genes orientation: rows are cells/spots, columns are genes, and `X` or the selected numeric layer contains nonempty finite expression values. Observation names and the selected gene identifier field must be nonempty and unique. Numeric normalized or transformed expression is accepted; integer counts are not required.
+
+The spatial file needs finite 2D or 3D coordinates. The default is `obsm["spatial"]`; choose another compatible `obsm` entry or map two/three numeric columns from `obs` when needed. Three-dimensional coordinates are displayed as an X–Y projection. A tissue image, `uns["spatial"]`, and cell-type annotation are optional.
+
+Gene IDs default to `var_names`; an existing `var` column can be selected for exact matching. A separate display-name field can be selected without changing stable IDs. The reference gene list is matched exactly against spatial identifiers; case, versions, and aliases are never normalized. Reference-only genes are not added to the candidate pool. Optional cell-type annotations are mapped from `obs`.
+
+Previous measurements must be provided explicitly by pasting IDs or uploading a simple CSV/TXT file. They are not inferred from expression matrix columns. Duplicate entries are counted once; exact matches are excluded, and unmatched IDs are reported.
+
+## Replace the demo methods
+
+- Replace `backend/app/selection.py::select_genes` with the research selector. Keep it independent of API and UI code. It receives the validated spatial and reference AnnData objects, previous IDs, a prepared candidate pool, `Ng`, and seed.
+- Replace `backend/app/evaluation.py::evaluate_demo` with the evaluator. It receives the validated spatial and reference AnnData objects, previous IDs, `Ng`, seed, and selected genes.
+- Keep response keys and provenance explicit, or update the Pydantic response models and frontend types together.
+
+The random choice is reproducible for a fixed candidate set and seed. All “Demo score” values and the demo evaluation curve are deterministic synthetic placeholders; they are not information gain, calibrated uncertainty, probabilities, or evidence of biological usefulness. Dataset dimensions, identifier examples, coordinate previews, exact overlap, and exclusions are derived from uploaded data.
+
+## Current limitations
+
+- The interface is a prototype; it does not infer temporal biology. “Next round” means the next measurement round only.
+- Validation scans expression values in bounded row chunks. Preview display is capped and sampled; the full matrix is never sent to the browser.
+- Orientation is shown as observations × genes and is never inferred from shape alone or automatically transposed. If the example IDs suggest a transposed object, the user can explicitly opt into a temporary transposed copy in the mapping controls, review the resulting IDs/coordinates, and switch back to the original.
+- Session metadata is held in API process memory; use one API worker for this prototype. Temporary files are cleaned on a later request after the configured idle TTL.
+- The evaluation is synthetic, and the random selector intentionally does not use expression, spatial coordinates, or the reference data.
+
+## Tests
+
+```powershell
+cd backend
+pytest
+```
+
+---
+
+# Research background
 *Name suggestions: SeqSelect ? GeneGuru?* 
 
 ## Data Setup
