@@ -174,7 +174,7 @@ def load_e75_inputs(hidden_rep: int = 2, visible_rep: int = 1, data_dir: pathlib
         hidden=hidden,
         oracle=submission.MeasurementOracle(hidden),
         genes=genes,
-        locations=torch.tensor(hidden.obs[["x", "y", "z"]].to_numpy(), dtype=torch.float32),
+        locations=get_locations(hidden),
         gene_log_counts=torch.zeros(hidden.n_obs, len(genes)),
         sc_gene_log_counts=[torch.from_numpy(vis)],
     )
