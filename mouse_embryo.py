@@ -3,12 +3,14 @@ import pathlib
 import sys
 
 import anndata as ad
+import numpy as np
+import scanpy as sc
 import torch
-from preprocessing.dataset_selection import select_dataset
 
 # Benchmark and data helpers live in eval_team/ (see eval_team/README.md):
 #   load_e75_inputs, measure, evaluate_reconstruction, run_and_evaluate, ...
-from eval_team import evaluate_reconstruction, load_e75_inputs, measure, run_and_evaluate  # noqa: F401
+from eval_team import run_and_evaluate
+from preprocessing.dataset_selection import select_dataset
 
 
 def explore_data(data_dir: pathlib.Path) -> None:
@@ -128,43 +130,108 @@ def random_method(
     return choices, imputed
 
 
+def scanpy_hvg(
+    n_genes_per_round: int,
+    gene_embeddings: torch.Tensor,
+    gene_similarity: torch.Tensor,
+    locations: torch.Tensor,
+    gene_log_counts: torch.Tensor,
+    sc_gene_log_counts: list[torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Method using scanpy's highly variable genes method to select the genes.
+
+    args:
+        gene_embeddings: shape (G,d)
+        gene_similarity: shape (G,G)
+        locations: shape (N,D)
+        gene_log_counts: shape (N,G) Only has g genes filled out.
+        sc_gene_log_counts: list of tensors of shape (N',G)
+
+    returns:
+        tuple of array one hot encoding (G,) of genes to select array of (N,G)
+        imputation of gene log counts
+    """
+
+    # Find the one hot encoding of what genes are already selected
+    selected_genes = gene_log_counts.sum(dim=0).bool()  # (G,)
+
+    # for now, just do the ranks based on the first data set
+    # convert back to counts with expm1
+    adata = ad.AnnData(np.expm1(sc_gene_log_counts[0].numpy()).astype("int"))
+    # annotates in var 'highly variable' genes
+    # ranks them in 'highly_variable_rank'
+    # sc.pp.filter_cells(adata, min_genes=3) # doesn't remove any, could up this though
+    sc.pp.highly_variable_genes(adata, flavor="seurat_v3", filter_unexpressed_genes=True)
+    ranks = adata.var["highly_variable_rank"].to_numpy()
+
+    # remove any ranks where we have already selected the gene
+    new_ranks = np.where(selected_genes, np.full(len(selected_genes), np.nan), ranks)
+
+    top_ranks = np.argpartition(new_ranks, 4)[:4]
+    one_hot_choices = torch.zeros_like(selected_genes).bool()
+    one_hot_choices[top_ranks] = True
+
+    # For the imputed data, get the mean gene expression counts for the single cell data
+    # sum over number of sc datasets and N' number of cells
+    mean_sc = torch.stack(sc_gene_log_counts, dim=0).float().mean(dim=(0, 1))
+
+    # first select the genes that have already been selected, then the ones that we
+    # selected in this round.
+    imputed = torch.where(
+        selected_genes,
+        gene_log_counts,
+        torch.where(one_hot_choices, mean_sc, torch.zeros_like(mean_sc)),
+    )
+
+    return torch.tensor(top_ranks), imputed
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--evaluate", action="store_true",
-                        help="run random_method on the real E7.5 embryos and score it with the eval-team benchmark")
+    parser.add_argument(
+        "--evaluate",
+        action="store_true",
+        help="run random_method on the real E7.5 embryos and score it with the eval-team benchmark",
+    )
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--verbose", action="store_true", help="show dataset selection progress")
     args = parser.parse_args()
     if args.evaluate:
         summary = run_and_evaluate(random_method, n_rounds=args.rounds)
-        keys = ["n_experiments", "n_genes_measured", "peng_spearman", "atlas_spearman",
-                "celltype_tv", "celltype_balanced_accuracy", "heldout_corr"]
-        for k in keys:
-            print(f"{k:28s} {summary[k]}")
-        for k in ["peng_spearman", "atlas_spearman", "celltype_tv", "celltype_balanced_accuracy"]:
-            print(f"{k + ' (true data)':28s} {summary[k + '_true_data']}")
+        for k, v in summary.items():
+            print(f"{k:28s} {v}")
+
         sys.exit(0)
 
     folder = pathlib.Path("../GSE278603_RAW")
 
     n_genes_per_round = 4
     d = 128
-    n_rounds = 2
 
     adata = ad.io.read_h5ad(sorted(folder.glob("*.h5ad"))[0])
     gene_names = list(adata.var_names)
     locations = get_locations(adata)
     N = len(locations)
 
-    dataset = select_dataset(adata, genes = "random", reference_genes=gene_names, d=d, top_n_var_genes = None, n_random_genes=4, seed =42, verbose=args.verbose) # This is assuming we do not change dataset each iteration. Currently no searching only uses TOME dataset at tau = 7.5
+    dataset = select_dataset(
+        adata,
+        genes="random",
+        reference_genes=gene_names,
+        d=d,
+        top_n_var_genes=None,
+        n_random_genes=4,
+        seed=42,
+        verbose=args.verbose,
+    )  # This is assuming we do not change dataset each iteration. Currently no searching only uses TOME dataset at tau = 7.5
     sc_gene_embeddings = torch.tensor(dataset["loadings"].to_numpy(), dtype=torch.float32)
     sc_gene_similarity = torch.tensor(dataset["gene_similarity"].to_numpy(), dtype=torch.float32)
     sc_gene_log_counts = [torch.tensor(dataset["gene_log_counts"].to_numpy(), dtype=torch.float32)]
     gene_names = dataset["common_gene_names"]
     G = len(gene_names)
     gene_log_counts = torch.zeros(N, G)
-    
-    for _ in range(n_rounds): 
+
+    for _ in range(args.rounds):
         choice, gene_log_counts = random_method(
             n_genes_per_round,
             sc_gene_embeddings,
