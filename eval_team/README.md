@@ -19,6 +19,8 @@ python -m eval_team.prepare_references --skip-atlas # Peng only
 
 Tables go to `reference_data/` next to the repo, or to `$MORPHO_REF_DIR` if set. The data folder can be moved the same way with `$MORPHO_DATA_DIR`.
 
+The adaptive methods need PyTorch and SciPy, and the Scanpy baseline needs `scanpy`. Install the benchmark dependencies with `pip install torch numpy scipy pandas anndata scikit-learn scanpy`, choosing the PyTorch build that matches your CUDA version.
+
 ## Scoring a reconstructed tensor
 
 Use this when all you have is the reconstruction: one expression value for every cell of the hidden embryo and every gene, with no experiment log.
@@ -112,6 +114,18 @@ From the command line:
 ```
 python mouse_embryo.py --evaluate --rounds 3
 ```
+
+This runs the EDDI method by default. The PPCA information-gain variant, the linear/ridge variant, the Scanpy baseline, and the random baseline are separate methods:
+
+```
+python mouse_embryo.py --evaluate --method ppca --rounds 3
+python mouse_embryo.py --evaluate --method linear --rounds 3
+python mouse_embryo.py --evaluate --method linear --linear-selection eddi --rounds 3
+python mouse_embryo.py --evaluate --method scanpy --rounds 3
+python mouse_embryo.py --evaluate --method random --rounds 3
+```
+
+The method implementations live in [`methods/`](../methods/README.md). `eddi` is the nonlinear Partial VAE from `methods/eddi.py`. `ppca` is the separate linear-Gaussian variant in `methods/ppca.py`: it fits probabilistic PCA on the visible reference and uses the same greedy latent-information-gain acquisition, but it is not the EDDI model itself. `linear` delegates selection to PPCA (`--linear-selection ppca`, the default), EDDI (`--linear-selection eddi`), or random, then fits a ridge regression from previously measured genes to all genes; it does not reuse the selector's imputation. `scanpy` is the upstream highly-variable-gene baseline in `mouse_embryo.py`.
 
 Without `--evaluate` the script runs the original toy example. `random_method` scores about 0 on every benchmark, because it predicts 0 for every gene it hasn't measured. The printout lists each score next to the true data's score for comparison.
 
@@ -225,4 +239,4 @@ With rep1 hidden, the pattern is the same. The script prints both.
 python -m unittest discover -s eval_team -t . -v
 ```
 
-There are 26 tests. The synthetic ones build a three-layer ring embryo with known regions. They cover the oracle and its limits, the experiment log, the regions under rotation, the held-out score with measured neighbourhoods excluded, the proportion score and the evaluator end to end. The tests on the two real E7.5 embryos check three things. Marker genes must land in the right regions, with T posterior and Otx2 and Sox2 anterior. Shuffled data must score near 0 and thinner data lower. The dummy method's submission must be valid, and its measured values must pass through unchanged. These tests are skipped when the data or the reference tables are missing.
+The suite covers the oracle and its limits, the experiment log, the regions under rotation, the held-out score with measured neighbourhoods excluded, the proportion score and the evaluator end to end. The synthetic ones build a three-layer ring embryo with known regions. The tests on the two real E7.5 embryos check three things. Marker genes must land in the right regions, with T posterior and Otx2 and Sox2 anterior. Shuffled data must score near 0 and thinner data lower. The dummy method's submission must be valid, and its measured values must pass through unchanged. These tests are skipped when the data or the reference tables are missing. `eval_team/test_methods.py` checks the EDDI, PPCA, and linear methods against the benchmark method contract on synthetic data.

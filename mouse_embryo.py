@@ -6,6 +6,7 @@ import anndata as ad
 import numpy as np
 import scanpy as sc
 import torch
+from methods import EDDIMethod, LinearImputationMethod, PPCAMethod
 
 # Benchmark and data helpers live in eval_team/ (see eval_team/README.md):
 #   load_e75_inputs, measure, evaluate_reconstruction, run_and_evaluate, ...
@@ -192,16 +193,99 @@ if __name__ == "__main__":
     parser.add_argument(
         "--evaluate",
         action="store_true",
-        help="run random_method on the real E7.5 embryos and score it with the eval-team benchmark",
+        help="run the selected method on the real E7.5 embryos and score it with the eval-team benchmark",
     )
+    parser.add_argument("--method", choices=["eddi", "ppca", "linear", "scanpy", "random"], default="eddi",
+                        help="selection/reconstruction method (default: eddi)")
+    parser.add_argument("--linear-selection", choices=["ppca", "eddi", "random"], default="ppca",
+                        help="gene selector used by --method linear (default: ppca)")
+    parser.add_argument("--linear-alpha", type=float, default=1.0)
+    parser.add_argument("--linear-train-cells", type=int, default=8000)
+    parser.add_argument("--linear-imputation-cells", type=int, default=2048)
     parser.add_argument("--rounds", type=int, default=3)
-    parser.add_argument("--verbose", action="store_true", help="show dataset selection progress")
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--eddi-epochs", type=int, default=30)
+    parser.add_argument("--eddi-train-cells", type=int, default=8000)
+    parser.add_argument("--eddi-acquisition-cells", type=int, default=128)
+    parser.add_argument("--eddi-imputation-cells", type=int, default=512)
+    parser.add_argument("--eddi-mask-min", type=int, default=1)
+    parser.add_argument("--eddi-mask-max", type=int, default=16)
+    parser.add_argument("--eddi-spatial-k", type=int, default=6)
+    parser.add_argument("--eddi-spatial-alpha", type=float, default=0.4)
+    parser.add_argument("--eddi-expression-alpha", type=float, default=0.5)
+    parser.add_argument("--eddi-detection-weight", type=float, default=1.0)
+    parser.add_argument("--eddi-expression-weight", type=float, default=1.0)
+    parser.add_argument("--eddi-observed-weight", type=float, default=0.1)
+    parser.add_argument("--eddi-no-output-gate", action="store_false", dest="eddi_output_gate")
+    parser.add_argument("--eddi-no-linear-skip", action="store_false", dest="eddi_linear_skip")
+    parser.add_argument("--eddi-min-detect", type=float, default=0.002)
+    parser.add_argument("--ppca-latent-dim", type=int, default=12)
+    parser.add_argument("--ppca-train-cells", type=int, default=8000)
+    parser.add_argument("--ppca-min-detect", type=float, default=0.005)
+    parser.add_argument("--ppca-noise", choices=["gene", "scalar"], default="gene")
+    parser.add_argument("--ppca-imputation-cells", type=int, default=512)
+    parser.add_argument("--verbose", action="store_true", help="show progress")
     args = parser.parse_args()
-    if args.evaluate:
-        summary = run_and_evaluate(random_method, n_rounds=args.rounds)
-        for k, v in summary.items():
-            print(f"{k:28s} {v}")
 
+    def make_selector(selection):
+        if selection == "eddi":
+            return EDDIMethod(
+                seed=args.seed,
+                epochs=args.eddi_epochs,
+                max_train_cells=args.eddi_train_cells,
+                max_acquisition_cells=args.eddi_acquisition_cells,
+                max_imputation_cells=args.eddi_imputation_cells,
+                mask_min_genes=args.eddi_mask_min,
+                mask_max_genes=args.eddi_mask_max,
+                spatial_k=args.eddi_spatial_k,
+                spatial_alpha=args.eddi_spatial_alpha,
+                expression_spatial_alpha=args.eddi_expression_alpha,
+                detection_weight=args.eddi_detection_weight,
+                expression_weight=args.eddi_expression_weight,
+                observed_expression_weight=args.eddi_observed_weight,
+                output_gate=args.eddi_output_gate,
+                linear_skip=args.eddi_linear_skip,
+                min_detect=args.eddi_min_detect,
+                verbose=args.verbose,
+            )
+        if selection == "ppca":
+            return PPCAMethod(
+                seed=args.seed,
+                latent_dim=args.ppca_latent_dim,
+                max_train_cells=args.ppca_train_cells,
+                min_detect=args.ppca_min_detect,
+                noise=args.ppca_noise,
+                max_imputation_cells=args.ppca_imputation_cells,
+                verbose=args.verbose,
+            )
+        if selection == "scanpy":
+            return scanpy_hvg
+        return random_method
+
+    def make_method():
+        if args.method == "linear":
+            return LinearImputationMethod(
+                selector=make_selector(args.linear_selection),
+                alpha=args.linear_alpha,
+                max_train_cells=args.linear_train_cells,
+                max_impute_cells=args.linear_imputation_cells,
+                seed=args.seed,
+                verbose=args.verbose,
+            )
+        return make_selector(args.method)
+
+    if args.evaluate:
+        summary = run_and_evaluate(
+            make_method(), n_rounds=args.rounds, seed=args.seed, verbose=args.verbose
+        )
+        keys = ["n_experiments", "n_genes_measured", "peng_spearman", "atlas_spearman",
+                "celltype_tv", "celltype_balanced_accuracy", "heldout_corr"]
+        for k in keys:
+            if k in summary:
+                print(f"{k:28s} {summary[k]}")
+        for k in ["peng_spearman", "atlas_spearman", "celltype_tv", "celltype_balanced_accuracy"]:
+            if k + "_true_data" in summary:
+                print(f"{k + ' (true data)':28s} {summary[k + '_true_data']}")
         sys.exit(0)
 
     folder = pathlib.Path("../GSE278603_RAW")
@@ -230,9 +314,9 @@ if __name__ == "__main__":
     gene_names = dataset["common_gene_names"]
     G = len(gene_names)
     gene_log_counts = torch.zeros(N, G)
-
+    method = make_method()
     for _ in range(args.rounds):
-        choice, gene_log_counts = random_method(
+        choice, gene_log_counts = method(
             n_genes_per_round,
             sc_gene_embeddings,
             sc_gene_similarity,
