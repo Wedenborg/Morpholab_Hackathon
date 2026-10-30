@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "panelprep"
+version = "0.1.0"
+description = "Preprocessing for spatial gene-panel planning: dataset matching, agreement scores, gene embeddings and annotations"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=2.0", "pandas>=2.2", "scipy>=1.14", "scikit-learn", "matplotlib", "seaborn",
+  "anndata>=0.11", "h5py", "pyyaml", "networkx", "requests", "POT", "umap-learn",
+  "pyarrow",
+]
+
+[project.optional-dependencies]
+deep = ["torch", "transformers", "gensim"]
+dev = ["pytest", "nbformat", "jupyter", "jinja2"]
+
+[tool.setuptools.packages.find]
+include = ["panelprep*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "network: test hits external services (UniProt, STRING, KEGG, Hugging Face)",
+  "slow: test takes minutes, not seconds",
+]

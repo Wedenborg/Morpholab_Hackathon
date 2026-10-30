@@ -1,0 +1,531 @@
+{
+ "flip": {
+  "raw_avg_js": {
+   "ds_a": 0.05,
+   "ds_b": 0.2,
+   "ds_c": 0.6
+  },
+  "agreement_avg_js": {
+   "ds_a": 1.0,
+   "ds_b": 0.5,
+   "ds_c": 0.0
+  },
+  "raw_ot_cluster_ari": {
+   "ds_a": 0.8,
+   "ds_b": 0.4,
+   "ds_c": NaN
+  },
+  "agreement_ot_cluster_ari": {
+   "ds_a": 1.0,
+   "ds_b": 0.0,
+   "ds_c": NaN
+  },
+  "ranking": [
+   {
+    "dataset": "ds_a",
+    "mean_agreement": 1.0,
+    "n_scores_ok": 2,
+    "n_scores_total": 2,
+    "agreement_rank": 1
+   },
+   {
+    "dataset": "ds_b",
+    "mean_agreement": 0.25,
+    "n_scores_ok": 2,
+    "n_scores_total": 2,
+    "agreement_rank": 2
+   },
+   {
+    "dataset": "ds_c",
+    "mean_agreement": 0.0,
+    "n_scores_ok": 1,
+    "n_scores_total": 2,
+    "agreement_rank": 3
+   }
+  ],
+  "orders_by_normaliser": {
+   "rank": [
+    "ds_a",
+    "ds_b",
+    "ds_c"
+   ],
+   "minmax": [
+    "ds_a",
+    "ds_b",
+    "ds_c"
+   ],
+   "zscore": [
+    "ds_a",
+    "ds_b",
+    "ds_c"
+   ]
+  }
+ },
+ "new_score": {
+  "registry_scores": [
+   "avg_js",
+   "avg_kl",
+   "corr_cosine",
+   "corr_frobenius",
+   "corr_mae",
+   "dummy_panel_overlap",
+   "ot_cluster_ari",
+   "spatial_autocorr_frobenius",
+   "spatial_corr_frobenius"
+  ],
+  "heatmap_columns": [
+   "avg_js",
+   "avg_kl",
+   "corr_cosine",
+   "corr_frobenius",
+   "corr_mae",
+   "dummy_panel_overlap",
+   "ot_cluster_ari",
+   "spatial_autocorr_frobenius",
+   "spatial_corr_frobenius"
+  ],
+  "dummy_values": {
+   "cand_sc": 1.0,
+   "cand_partial": 0.75
+  },
+  "dummy_in_report": true,
+  "report_chars": 13081
+ },
+ "status_cells": {
+  "status": "not_applicable",
+  "raw_is_nan": true,
+  "colour_is_masked": true,
+  "ds_c_n_scores_ok": 1,
+  "grey_cells": 1,
+  "status_label_in_figure": true
+ },
+ "report_coverage": {
+  "n_registry_entries": 19,
+  "entries": [
+   "avg_js",
+   "avg_kl",
+   "corr_cosine",
+   "corr_frobenius",
+   "corr_mae",
+   "dummy_panel_overlap",
+   "ot_cluster_ari",
+   "spatial_autocorr_frobenius",
+   "spatial_corr_frobenius",
+   "ae_separate",
+   "contrastive_ae",
+   "dcca",
+   "esm2_sequence",
+   "factor_analysis",
+   "joint_ae",
+   "kegg_causal",
+   "pca_baseline",
+   "string_ppi",
+   "vae_separate"
+  ],
+  "missing_from_report": [],
+  "report_chars": 12053,
+  "status_counts": {
+   "implemented": 17,
+   "evaluated": 2,
+   "deferred": 1
+  },
+  "evaluated": [
+   "avg_js",
+   "ot_cluster_ari"
+  ]
+ },
+ "figures": {
+  "sizes_bytes": {
+   "scatter.png": 69620,
+   "panel.png": 106138,
+   "heat.png": 45030
+  },
+  "panel_quality": [
+   {
+    "embedding": "partial",
+    "silhouette": 0.8188,
+    "silhouette_p": 0.0196,
+    "knn_agreement": 0.768,
+    "knn_p": 0.0196,
+    "n_genes_plotted": 50,
+    "n_genes_total": 60
+   },
+   {
+    "embedding": "clustered",
+    "silhouette": 0.8168,
+    "silhouette_p": 0.0196,
+    "knn_agreement": 0.9333,
+    "knn_p": 0.0196,
+    "n_genes_plotted": 60,
+    "n_genes_total": 60
+   },
+   {
+    "embedding": "clustered_noisy",
+    "silhouette": 0.1766,
+    "silhouette_p": 0.0196,
+    "knn_agreement": 0.5822,
+    "knn_p": 0.0196,
+    "n_genes_plotted": 60,
+    "n_genes_total": 60
+   },
+   {
+    "embedding": "noise",
+    "silhouette": -0.0429,
+    "silhouette_p": 0.2157,
+    "knn_agreement": 0.2367,
+    "knn_p": 0.4902,
+    "n_genes_plotted": 60,
+    "n_genes_total": 60
+   }
+  ],
+  "scatter_quality": {
+   "silhouette": 0.8168,
+   "silhouette_p": 0.0476,
+   "knn_agreement": 0.9333,
+   "knn_p": 0.0476,
+   "n_genes_scored": 60,
+   "n_classes": 4
+  }
+ },
+ "masked_genes": {
+  "resolve_len": 7,
+  "mask": [
+   true,
+   true,
+   true,
+   true,
+   true,
+   false,
+   false
+  ],
+  "clean_counts": {
+   "n_total": 7,
+   "n_kept": 5,
+   "n_all_nan": 2,
+   "n_partial_nan": 0,
+   "dim": 6
+  }
+ },
+ "synthetic": {
+  "raw": {
+   "avg_js": {
+    "sibling": 0.0049,
+    "same_program_diff_mixture": 0.089,
+    "shuffled_structure": 0.0073,
+    "unrelated": 0.1508
+   },
+   "avg_kl": {
+    "sibling": 0.0196,
+    "same_program_diff_mixture": 0.3332,
+    "shuffled_structure": 0.0285,
+    "unrelated": 1.2969
+   },
+   "corr_cosine": {
+    "sibling": 0.9969,
+    "same_program_diff_mixture": 0.9883,
+    "shuffled_structure": -0.2227,
+    "unrelated": -0.6073
+   },
+   "corr_frobenius": {
+    "sibling": 0.0376,
+    "same_program_diff_mixture": 0.0665,
+    "shuffled_structure": 0.4386,
+    "unrelated": 0.6248
+   },
+   "corr_mae": {
+    "sibling": 0.0295,
+    "same_program_diff_mixture": 0.0261,
+    "shuffled_structure": 0.4314,
+    "unrelated": 0.5562
+   },
+   "dummy_panel_overlap": {
+    "sibling": 1.0,
+    "same_program_diff_mixture": 1.0,
+    "shuffled_structure": 1.0,
+    "unrelated": 1.0
+   },
+   "ot_cluster_ari": {
+    "sibling": 0.7284,
+    "same_program_diff_mixture": 0.5778,
+    "shuffled_structure": 0.44,
+    "unrelated": 0.1451
+   },
+   "spatial_autocorr_frobenius": {
+    "sibling": 0.0159,
+    "same_program_diff_mixture": NaN,
+    "shuffled_structure": NaN,
+    "unrelated": 0.3302
+   },
+   "spatial_corr_frobenius": {
+    "sibling": 0.0532,
+    "same_program_diff_mixture": NaN,
+    "shuffled_structure": NaN,
+    "unrelated": 0.8742
+   }
+  },
+  "agreement": {
+   "avg_js": {
+    "sibling": 1.0,
+    "same_program_diff_mixture": 0.3333,
+    "shuffled_structure": 0.6667,
+    "unrelated": 0.0
+   },
+   "avg_kl": {
+    "sibling": 1.0,
+    "same_program_diff_mixture": 0.3333,
+    "shuffled_structure": 0.6667,
+    "unrelated": 0.0
+   },
+   "corr_cosine": {
+    "sibling": 1.0,
+    "same_program_diff_mixture": 0.6667,
+    "shuffled_structure": 0.3333,
+    "unrelated": 0.0
+   },
+   "corr_frobenius": {
+    "sibling": 1.0,
+    "same_program_diff_mixture": 0.6667,
+    "shuffled_structure": 0.3333,
+    "unrelated": 0.0
+   },
+   "corr_mae": {
+    "sibling": 0.6667,
+    "same_program_diff_mixture": 1.0,
+    "shuffled_structure": 0.3333,
+    "unrelated": 0.0
+   },
+   "dummy_panel_overlap": {
+    "sibling": 0.5,
+    "same_program_diff_mixture": 0.5,
+    "shuffled_structure": 0.5,
+    "unrelated": 0.5
+   },
+   "ot_cluster_ari": {
+    "sibling": 1.0,
+    "same_program_diff_mixture": 0.6667,
+    "shuffled_structure": 0.3333,
+    "unrelated": 0.0
+   },
+   "spatial_autocorr_frobenius": {
+    "sibling": 1.0,
+    "same_program_diff_mixture": NaN,
+    "shuffled_structure": NaN,
+    "unrelated": 0.0
+   },
+   "spatial_corr_frobenius": {
+    "sibling": 1.0,
+    "same_program_diff_mixture": NaN,
+    "shuffled_structure": NaN,
+    "unrelated": 0.0
+   }
+  },
+  "status": {
+   "avg_js": {
+    "sibling": "ok",
+    "same_program_diff_mixture": "ok",
+    "shuffled_structure": "ok",
+    "unrelated": "ok"
+   },
+   "avg_kl": {
+    "sibling": "ok",
+    "same_program_diff_mixture": "ok",
+    "shuffled_structure": "ok",
+    "unrelated": "ok"
+   },
+   "corr_cosine": {
+    "sibling": "ok",
+    "same_program_diff_mixture": "ok",
+    "shuffled_structure": "ok",
+    "unrelated": "ok"
+   },
+   "corr_frobenius": {
+    "sibling": "ok",
+    "same_program_diff_mixture": "ok",
+    "shuffled_structure": "ok",
+    "unrelated": "ok"
+   },
+   "corr_mae": {
+    "sibling": "ok",
+    "same_program_diff_mixture": "ok",
+    "shuffled_structure": "ok",
+    "unrelated": "ok"
+   },
+   "dummy_panel_overlap": {
+    "sibling": "ok",
+    "same_program_diff_mixture": "ok",
+    "shuffled_structure": "ok",
+    "unrelated": "ok"
+   },
+   "ot_cluster_ari": {
+    "sibling": "ok",
+    "same_program_diff_mixture": "ok",
+    "shuffled_structure": "ok",
+    "unrelated": "ok"
+   },
+   "spatial_autocorr_frobenius": {
+    "sibling": "ok",
+    "same_program_diff_mixture": "not_applicable",
+    "shuffled_structure": "not_applicable",
+    "unrelated": "ok"
+   },
+   "spatial_corr_frobenius": {
+    "sibling": "ok",
+    "same_program_diff_mixture": "not_applicable",
+    "shuffled_structure": "not_applicable",
+    "unrelated": "ok"
+   }
+  },
+  "ranking": [
+   {
+    "dataset": "sibling",
+    "mean_agreement": 0.9074,
+    "n_scores_ok": 9,
+    "n_scores_total": 9,
+    "agreement_rank": 1
+   },
+   {
+    "dataset": "same_program_diff_mixture",
+    "mean_agreement": 0.5952,
+    "n_scores_ok": 7,
+    "n_scores_total": 9,
+    "agreement_rank": 2
+   },
+   {
+    "dataset": "shuffled_structure",
+    "mean_agreement": 0.4524,
+    "n_scores_ok": 7,
+    "n_scores_total": 9,
+    "agreement_rank": 3
+   },
+   {
+    "dataset": "unrelated",
+    "mean_agreement": 0.0556,
+    "n_scores_ok": 9,
+    "n_scores_total": 9,
+    "agreement_rank": 4
+   }
+  ],
+  "expected_order": [
+   "sibling",
+   "same_program_diff_mixture",
+   "shuffled_structure",
+   "unrelated"
+  ],
+  "heatmap_bytes": 157494,
+  "report_chars": 13739
+ },
+ "pairwise": {
+  "agreement_by_metric": {
+   "knn_jaccard": {
+    "clustered_vs_partial": 1.0,
+    "clustered_vs_clustered_noisy": 0.29864053358635406,
+    "clustered_vs_noise": 0.1018948515078546,
+    "null_clustered_vs_partial": 0.11482291513096465,
+    "null_clustered_vs_clustered_noisy": 0.09244516520058316,
+    "null_clustered_vs_noise": 0.09269448130129244,
+    "p_clustered_vs_partial": 0.0909,
+    "n_shared_clustered_partial": 50
+   },
+   "cka": {
+    "clustered_vs_partial": 1.0,
+    "clustered_vs_clustered_noisy": 0.6302452661109719,
+    "clustered_vs_noise": 0.09073263974335531,
+    "null_clustered_vs_partial": 0.04299100307806396,
+    "null_clustered_vs_clustered_noisy": 0.05503669711430377,
+    "null_clustered_vs_noise": 0.07891164892017102,
+    "p_clustered_vs_partial": 0.0909,
+    "n_shared_clustered_partial": 50
+   },
+   "mantel": {
+    "clustered_vs_partial": 1.0,
+    "clustered_vs_clustered_noisy": 0.4820059880532701,
+    "clustered_vs_noise": -0.021057129839471098,
+    "null_clustered_vs_partial": -0.006922820678026511,
+    "null_clustered_vs_clustered_noisy": -0.002177389165428905,
+    "null_clustered_vs_noise": 0.0064624678239071365,
+    "p_clustered_vs_partial": 0.0909,
+    "n_shared_clustered_partial": 50
+   }
+  },
+  "procrustes_clustered_vs_partial": 0.0,
+  "procrustes_clustered_vs_noise": 0.9824,
+  "top_movers": [
+   {
+    "gene": "Gene0041",
+    "displacement": 0.0
+   },
+   {
+    "gene": "Gene0053",
+    "displacement": 0.0
+   },
+   {
+    "gene": "Gene0033",
+    "displacement": 0.0
+   },
+   {
+    "gene": "Gene0021",
+    "displacement": 0.0
+   },
+   {
+    "gene": "Gene0025",
+    "displacement": 0.0
+   }
+  ],
+  "grid": [
+   {
+    "method_a": "clustered",
+    "method_b": "noise",
+    "abs_spearman_coord1": 0.0343,
+    "knn_jaccard": 0.1472,
+    "n_shared": 60,
+    "n_plotted": 60,
+    "projection": "pca"
+   },
+   {
+    "method_a": "clustered",
+    "method_b": "partial",
+    "abs_spearman_coord1": 0.9998,
+    "knn_jaccard": 1.0,
+    "n_shared": 50,
+    "n_plotted": 50,
+    "projection": "pca"
+   },
+   {
+    "method_a": "noise",
+    "method_b": "partial",
+    "abs_spearman_coord1": 0.0163,
+    "knn_jaccard": 0.1765,
+    "n_shared": 50,
+    "n_plotted": 50,
+    "projection": "pca"
+   },
+   {
+    "method_a": "clustered",
+    "method_b": "clustered_noisy",
+    "abs_spearman_coord1": 0.851,
+    "knn_jaccard": 0.4422,
+    "n_shared": 60,
+    "n_plotted": 60,
+    "projection": "pca"
+   },
+   {
+    "method_a": "noise",
+    "method_b": "clustered_noisy",
+    "abs_spearman_coord1": 0.0633,
+    "knn_jaccard": 0.1477,
+    "n_shared": 60,
+    "n_plotted": 60,
+    "projection": "pca"
+   },
+   {
+    "method_a": "partial",
+    "method_b": "clustered_noisy",
+    "abs_spearman_coord1": 0.8566,
+    "knn_jaccard": 0.4399,
+    "n_shared": 50,
+    "n_plotted": 50,
+    "projection": "pca"
+   }
+  ]
+ }
+}

@@ -1,0 +1,53 @@
+# Synthetic end-to-end configuration -- the fast path that validates the whole
+# pipeline against a fixture with a KNOWN correct answer.
+#
+# This is the single configuration entry point. Everything the pipeline does is
+# read from here (or from a Config built in Python); there is no second place to
+# look. Adding a score name below is all that is needed for it to appear in the
+# comparison table, the heatmap and the markdown report.
+
+run_name: synthetic
+seed: 0
+outdir: outputs/synthetic
+organism: mus_musculus
+data_dir: data
+
+# null = every catalogue entry. The synthetic run builds its candidates in
+# memory instead, so this is unused there and present for symmetry.
+candidates: null
+max_obs_per_dataset: 800
+
+match_method: tfidf       # tfidf | keyword
+match_top_k: 0            # 0 = rank everything, drop nothing
+
+scores:
+  - avg_kl                      # (a) requested: average per-gene KL divergence
+  - avg_js                      #     symmetric, bounded companion (recommended)
+  - corr_frobenius              # (b) requested: panel correlation-matrix distance
+  - corr_cosine                 #     pattern-only companion
+  - ot_cluster_ari              # (c) requested: OT-transported clustering agreement
+  - spatial_autocorr_frobenius  #     spatial: Moran's I profile agreement
+  - spatial_corr_frobenius      #     spatial: co-localisation at tissue scale
+score_params:
+  avg_kl:
+    n_bins: 30
+    direction: forward
+  ot_cluster_ari:
+    n_clusters: 5
+    reg: 0.05
+allow_unit_mismatch: false
+
+embedders:
+  - pca_baseline
+  - ae_separate
+  - vae_separate
+  - joint_ae
+  - dcca
+  - contrastive_ae
+embedder_params: {}
+embedding_dim: 32
+gene_universe: union      # union | intersection (joint methods need overlap)
+max_genes: null
+
+annotation_sources: [kegg, roles]
+offline: false
