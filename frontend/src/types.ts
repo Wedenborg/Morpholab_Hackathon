@@ -1,4 +1,5 @@
 export type DatasetKind = "spatial" | "reference";
+export type SelectionMethod = "random" | "dummy_markers" | "dummy_variance" | "dummy_random" | "manual";
 
 export interface ValidationIssue {
   severity: "error" | "warning";
@@ -49,6 +50,13 @@ export interface DatasetUploadResponse {
   mapping_options: MappingOptions;
 }
 
+export interface PresetSessionResponse {
+  session_id: string;
+  previous_genes: string;
+  panel_size?: number;
+  seed?: number;
+}
+
 export interface MappingForm {
   gene_field: string;
   display_field: string;
@@ -64,7 +72,7 @@ export interface SelectedGene {
   gene_id: string;
   display_name: string;
   rank: number;
-  score: number;
+  score: number | null;
   score_provenance: string;
 }
 
@@ -83,9 +91,19 @@ export interface SelectionResponse {
   evaluation: {
     label: string;
     synthetic: boolean;
+    available: boolean;
     notice: string;
-    metric: string;
-    points: { round: number; value: number }[];
+    metrics: {
+      id: string;
+      label: string;
+      description: string;
+      value: number;
+      true_data: number | null;
+    }[];
+    summary?: Record<string, string | number | boolean>;
+    measured_gene_count?: number;
+    experiment_count?: number;
+    external_references?: string[];
   };
   run_summary: Record<string, unknown>;
 }

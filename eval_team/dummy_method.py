@@ -30,8 +30,9 @@ from scipy.spatial.distance import cdist
 from .harness import load_embryo as load
 from .submission import K_MAX, MeasurementOracle
 
-def choose_gene_sets(visible, library, n_sets, how="markers", seed=0, k=K_MAX):
+def choose_gene_sets(visible, library, n_sets, how="markers", seed=0, k=K_MAX, exclude=()):
     genes = pd.Index(visible.var_names).intersection(library)
+    genes = genes[~genes.isin(exclude)]
     X = sp.csr_matrix(visible[:, genes].X)
     if how == "variance":
         m = np.asarray(X.mean(0)).ravel()
@@ -59,9 +60,9 @@ def choose_gene_sets(visible, library, n_sets, how="markers", seed=0, k=K_MAX):
     return [list(picked[i * k:(i + 1) * k]) for i in range(n_sets)]
 
 
-def run(oracle, visible, n_sets=8, n_neighbours=20, how="markers", seed=0):
+def run(oracle, visible, n_sets=8, n_neighbours=20, how="markers", seed=0, exclude=()):
     library = oracle.genes
-    sets = choose_gene_sets(visible, library, n_sets, how, seed)
+    sets = choose_gene_sets(visible, library, n_sets, how, seed, exclude=exclude)
     # Visible expression in library gene order (zeros for genes the visible embryo lacks).
     vcols = pd.Index(visible.var_names).get_indexer(library)
     S = sp.csr_matrix((np.ones((vcols >= 0).sum()), (vcols[vcols >= 0], np.where(vcols >= 0)[0])),

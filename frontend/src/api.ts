@@ -4,6 +4,8 @@ import type {
   CandidateSummary,
   MappingForm,
   PreviewResponse,
+  PresetSessionResponse,
+  SelectionMethod,
   SelectionResponse,
 } from "./types";
 
@@ -59,12 +61,16 @@ export const api = {
       body: JSON.stringify(mapping),
     }),
   example: () =>
-    request<{ session_id: string; previous_genes: string }>("/api/example", { method: "POST" }),
+    request<PresetSessionResponse>("/api/example", { method: "POST" }),
+  mouseEmbryo: () =>
+    request<PresetSessionResponse>("/api/mouse-embryo", { method: "POST" }),
   getSession: (id: string) =>
     request<{ datasets: Record<string, import("./types").DatasetSummary> }>(`/api/sessions/${id}`),
   select: (payload: {
     session_id: string;
     previous_genes: string[];
+    method: SelectionMethod;
+    chosen_genes: string[];
     ng: number;
     seed: number | null;
   }) =>

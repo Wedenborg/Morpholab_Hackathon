@@ -3,6 +3,7 @@ fastapi>=0.115
 numpy>=2.0
 pandas>=2.2
 python-multipart>=0.0.20
+scikit-learn>=1.5
 scipy>=1.14
 uvicorn[standard]>=0.34
 pytest>=8.3

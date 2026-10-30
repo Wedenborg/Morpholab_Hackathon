@@ -17,7 +17,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import data_io
 from .candidates import prepare_candidates
 from .data_io import MAX_UPLOAD_BYTES, MAX_UPLOAD_MB
-from .evaluation import evaluate_demo
+from .evaluation import (
+    evaluation_unavailable,
+    evaluate_mouse_embryo_baseline,
+    run_eval_team_dummy_method,
+)
 from .models import (
     DatasetSummary,
     DatasetUploadResponse,
@@ -25,6 +29,7 @@ from .models import (
     CandidateSummary,
     MappingRequest,
     PreviewResponse,
+    SelectedGene,
     SelectionRequest,
     SelectionResponse,
 )
@@ -33,6 +38,16 @@ from .selection import METHOD_ID, METHOD_LABEL, select_genes
 
 DATA_ROOT = Path(os.getenv("GENE_PANEL_DATA_DIR", Path(os.getenv("TEMP", "/tmp")) / "gene-panel-planner"))
 SESSION_TTL_SECONDS = int(os.getenv("GENE_PANEL_SESSION_TTL_SECONDS", str(24 * 60 * 60)))
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MOUSE_EMBRYO_DATA_DIR = Path(
+    os.getenv("MORPHO_DATA_DIR", PROJECT_ROOT / "data" / "GSE278603_RAW")
+)
+MOUSE_EMBRYO_PREVIOUS_GENES = ["Fth1", "Rpl8", "Eif5a", "Cox7c"]
+DUMMY_METHODS = {
+    "dummy_markers": ("markers", "Dummy markers · nearest-neighbour reconstruction"),
+    "dummy_variance": ("variance", "Dummy variable genes · nearest-neighbour reconstruction"),
+    "dummy_random": ("random", "Dummy random genes · nearest-neighbour reconstruction"),
+}
 
 
 @dataclass
@@ -57,6 +72,7 @@ class SessionState:
     created_at: float = field(default_factory=time.time)
     last_used_at: float = field(default_factory=time.time)
     datasets: dict[str, DatasetFile] = field(default_factory=dict)
+    e75_benchmark: bool = False
 
 
 sessions: dict[str, SessionState] = {}
@@ -87,6 +103,15 @@ def _cleanup_sessions() -> None:
                 and now - directory.stat().st_mtime > SESSION_TTL_SECONDS
             ):
                 shutil.rmtree(directory, ignore_errors=False)
+
+
+def _new_session_state() -> SessionState:
+    DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    _cleanup_sessions()
+    session_id = str(uuid.uuid4())
+    directory = DATA_ROOT / session_id
+    directory.mkdir(mode=0o700)
+    return SessionState(session_id=session_id, directory=directory)
 
 
 def _is_session_directory(path: Path) -> bool:
@@ -241,7 +266,9 @@ async def upload_dataset(
         gene_field, display_field, matrix_layer, coordinate_source, coordinate_field, coordinate_columns,
         cell_type_field, transpose
     )
-    return await _store_upload(state, kind, file, mapping)
+    response = await _store_upload(state, kind, file, mapping)
+    state.e75_benchmark = False
+    return response
 
 
 @router.post("/datasets/{kind}/mapping", response_model=DatasetUploadResponse)
@@ -299,42 +326,145 @@ def run_selection(request: SelectionRequest) -> SelectionResponse:
     spatial = _summary_dataset(state, "spatial")
     reference = _summary_dataset(state, "reference")
     pool = prepare_candidates(spatial.gene_ids, reference.gene_ids, request.previous_genes, spatial.display_names)
-    if request.ng > len(pool.identifiers):
+    display_by_id = dict(zip(spatial.gene_ids, spatial.display_names))
+    seed = request.seed if request.seed is not None else secrets.randbits(32)
+    if request.method == "manual":
+        chosen = list(dict.fromkeys(gene.strip() for gene in request.chosen_genes if gene.strip()))
+        if not chosen:
+            raise HTTPException(status_code=422, detail="Enter at least one gene you chose.")
+        unknown = [gene for gene in chosen if gene not in spatial.gene_ids]
+        if unknown:
+            raise HTTPException(
+                status_code=422,
+                detail=f"These chosen gene identifiers were not found in the spatial dataset: {', '.join(unknown[:20])}",
+            )
+        selected = [
+            SelectedGene(
+                gene_id=gene,
+                display_name=display_by_id[gene],
+                rank=index,
+                score=None,
+                score_provenance="User-selected gene; no method score.",
+            )
+            for index, gene in enumerate(chosen, start=1)
+        ]
+    elif request.method in DUMMY_METHODS:
+        if not state.e75_benchmark:
+            raise HTTPException(
+                status_code=422,
+                detail="The eval_team dummy methods are only available with the local E7.5 mouse-embryo preset.",
+            )
+        if request.ng % 4:
+            raise HTTPException(
+                status_code=422,
+                detail="The eval_team dummy methods measure genes in sets of four; choose a gene count divisible by 4.",
+            )
+        if (
+            spatial.mapping.gene_field != "var_names"
+            or spatial.mapping.matrix_layer != "X"
+            or spatial.transposed
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Restore the local preset's var_names, X matrix, and original orientation to run eval_team methods.",
+            )
+        how, method_label = DUMMY_METHODS[request.method]
+        try:
+            chosen_genes, evaluation = run_eval_team_dummy_method(
+                spatial.source_path,
+                reference.source_path,
+                how,
+                request.ng // 4,
+                request.previous_genes,
+                seed,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if len(chosen_genes) != request.ng:
+            raise HTTPException(
+                status_code=422,
+                detail=f"The dummy method selected {len(chosen_genes)} genes; {request.ng} were requested. "
+                "Reduce the number of genes or try another method.",
+            )
+        selected = [
+            SelectedGene(
+                gene_id=gene,
+                display_name=display_by_id[gene],
+                rank=index,
+                score=None,
+                score_provenance="Selected by eval_team dummy method; no gene-level score.",
+            )
+            for index, gene in enumerate(chosen_genes, start=1)
+        ]
+    else:
+        method_label = METHOD_LABEL
+
+    if request.method == "random" and request.ng > len(pool.identifiers):
         raise HTTPException(
             status_code=422,
             detail=f"Requested {request.ng} genes, but only {len(pool.identifiers)} eligible genes remain.",
         )
-    seed = request.seed if request.seed is not None else secrets.randbits(32)
-    evaluation_spatial = data_io.open_annotated(spatial.path)
-    try:
-        evaluation_reference = data_io.open_annotated(reference.path)
+    if request.method == "random":
+        evaluation_spatial = data_io.open_annotated(spatial.path)
         try:
-            selected = select_genes(
-                evaluation_spatial,
-                evaluation_reference,
-                request.previous_genes,
-                pool,
-                request.ng,
-                seed,
-            )
-            evaluation = evaluate_demo(
-                evaluation_spatial,
-                evaluation_reference,
-                request.previous_genes,
-                request.ng,
-                seed,
-                selected,
-            )
+            evaluation_reference = data_io.open_annotated(reference.path)
+            try:
+                selected = select_genes(
+                    evaluation_spatial,
+                    evaluation_reference,
+                    request.previous_genes,
+                    pool,
+                    request.ng,
+                    seed,
+                )
+            finally:
+                data_io.close_annotated(evaluation_reference)
         finally:
-            data_io.close_annotated(evaluation_reference)
-    finally:
-        data_io.close_annotated(evaluation_spatial)
+            data_io.close_annotated(evaluation_spatial)
+
+    if request.method == "manual":
+        if request.ng != len(selected):
+            raise HTTPException(status_code=422, detail="The requested gene count does not match the chosen gene list.")
+        method_id = "manual-genes"
+        method_label = "User-selected genes"
+        evaluation = (
+            evaluate_mouse_embryo_baseline(spatial.source_path, reference.source_path, [*request.previous_genes, *(gene.gene_id for gene in selected)])
+            if state.e75_benchmark
+            and spatial.mapping.gene_field == "var_names"
+            and spatial.mapping.matrix_layer == "X"
+            and not spatial.transposed
+            else evaluation_unavailable(
+                "The eval_team benchmark is available for the unmodified local E7.5 mouse-embryo preset only. "
+                "No synthetic evaluation is generated for uploaded or synthetic-example datasets."
+            )
+        )
+    elif request.method in DUMMY_METHODS:
+        method_id = f"eval-team-{request.method}"
+    else:
+        method_id = METHOD_ID
+        if (
+            state.e75_benchmark
+            and spatial.mapping.gene_field == "var_names"
+            and spatial.mapping.matrix_layer == "X"
+            and not spatial.transposed
+        ):
+            evaluation = evaluate_mouse_embryo_baseline(
+                spatial.source_path,
+                reference.source_path,
+                [*request.previous_genes, *(gene.gene_id for gene in selected)],
+            )
+        else:
+            evaluation = evaluation_unavailable(
+                "The eval_team benchmark is available for the unmodified local E7.5 mouse-embryo preset only. "
+                "No synthetic evaluation is generated for uploaded or synthetic-example datasets."
+            )
     overlap = len(set(spatial.gene_ids).intersection(reference.gene_ids))
     run_summary = {
-        "method": METHOD_ID,
-        "method_label": METHOD_LABEL,
+        "method": method_id,
+        "method_label": method_label,
         "seed": seed,
-        "requested_count": request.ng,
+        "requested_count": len(selected),
+        "selection_method": request.method,
         "candidate_count": len(spatial.gene_ids),
         "previous_genes_unique_count": len(pool.previous_unique),
         "matched_previous_genes": list(pool.matched_previous),
@@ -363,8 +493,8 @@ def run_selection(request: SelectionRequest) -> SelectionResponse:
         "evaluation": evaluation,
     }
     return SelectionResponse(
-        method=METHOD_ID,
-        method_label=METHOD_LABEL,
+        method=method_id,
+        method_label=method_label,
         seed=seed,
         selected_genes=selected,
         candidate_count=len(spatial.gene_ids),
@@ -372,7 +502,7 @@ def run_selection(request: SelectionRequest) -> SelectionResponse:
         matched_previous_count=len(pool.matched_previous),
         unmatched_previous_genes=list(pool.unmatched_previous),
         eligible_count=len(pool.identifiers),
-        requested_count=request.ng,
+        requested_count=len(selected),
         reference_overlap_count=overlap,
         evaluation=evaluation,
         run_summary=run_summary,
@@ -459,13 +589,9 @@ def create_example() -> dict[str, str]:
     import pandas as pd
     from scipy import sparse
 
-    DATA_ROOT.mkdir(parents=True, exist_ok=True)
-    _cleanup_sessions()
-    session_id = str(uuid.uuid4())
-    directory = DATA_ROOT / session_id
-    directory.mkdir(mode=0o700)
-    state = SessionState(session_id=session_id, directory=directory)
-    sessions[session_id] = state
+    state = _new_session_state()
+    session_id = state.session_id
+    directory = state.directory
     rng = np.random.default_rng(42)
     spatial_genes = [f"Gene-{index:02d}" for index in range(1, 21)]
     reference_genes = spatial_genes[:16] + [f"Ref-{index:02d}" for index in range(1, 5)]
@@ -507,7 +633,79 @@ def create_example() -> dict[str, str]:
             gene_ids=gene_ids, coordinates=coordinates,
             display_names=display_names,
         )
+    sessions[session_id] = state
     return {"session_id": session_id, "previous_genes": "Gene-01\nGene-02\nGene-03"}
+
+
+@router.post("/mouse-embryo")
+def create_mouse_embryo_session() -> dict[str, object]:
+    spatial_path = MOUSE_EMBRYO_DATA_DIR / "GSM9046243_Embryo_E7.5_stereo_rep1.h5ad"
+    reference_path = MOUSE_EMBRYO_DATA_DIR / "GSM9046244_Embryo_E7.5_stereo_rep2.h5ad"
+    missing = [path for path in (spatial_path, reference_path) if not path.is_file()]
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The local E7.5 mouse embryo files are unavailable. Set MORPHO_DATA_DIR "
+                f"to a folder containing both required .h5ad files. Missing: {', '.join(map(str, missing))}"
+            ),
+        )
+
+    state = _new_session_state()
+    try:
+        datasets = (
+            (
+                "spatial",
+                spatial_path,
+                MappingRequest(
+                    coordinate_source="obs",
+                    coordinate_columns=["x", "y", "z"],
+                    cell_type_field="celltype",
+                ),
+            ),
+            ("reference", reference_path, MappingRequest(cell_type_field="celltype")),
+        )
+        for kind, path, mapping in datasets:
+            summary, gene_ids, display_names, coordinates = data_io.validate_dataset(
+                path, kind, path.name, path.stat().st_size, mapping
+            )
+            if not summary.valid:
+                errors = "; ".join(issue.what for issue in summary.issues if issue.severity == "error")
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"The local {kind} mouse embryo dataset did not pass validation: {errors}",
+                )
+            state.datasets[kind] = DatasetFile(
+                kind=kind,
+                path=path,
+                source_path=path,
+                transposed=False,
+                filename=path.name,
+                size_bytes=path.stat().st_size,
+                mapping=mapping,
+                summary=summary,
+                gene_ids=gene_ids,
+                display_names=display_names,
+                coordinates=coordinates,
+            )
+    except HTTPException:
+        shutil.rmtree(state.directory, ignore_errors=True)
+        raise
+    except (OSError, ValueError, TypeError, ImportError) as exc:
+        shutil.rmtree(state.directory, ignore_errors=True)
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not load the local mouse embryo datasets: {exc}",
+        ) from exc
+
+    sessions[state.session_id] = state
+    state.e75_benchmark = True
+    return {
+        "session_id": state.session_id,
+        "previous_genes": "\n".join(MOUSE_EMBRYO_PREVIOUS_GENES),
+        "panel_size": 10,
+        "seed": 42,
+    }
 
 
 app = FastAPI(title="Gene Panel Planner", version="0.1.0")

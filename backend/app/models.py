@@ -64,6 +64,8 @@ class MappingRequest(BaseModel):
 class SelectionRequest(BaseModel):
     session_id: str
     previous_genes: list[str] = Field(default_factory=list)
+    method: Literal["random", "dummy_markers", "dummy_variance", "dummy_random", "manual"] = "random"
+    chosen_genes: list[str] = Field(default_factory=list)
     ng: int = Field(strict=True, gt=0)
     seed: int | None = None
 
@@ -86,7 +88,7 @@ class SelectedGene(BaseModel):
     gene_id: str
     display_name: str
     rank: int
-    score: float
+    score: float | None = None
     score_provenance: str
 
 

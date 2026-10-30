@@ -1,7 +1,7 @@
 
 # Fieldnote — Gene panel planner
 
-A local research prototype for preparing a gene panel for the next measurement round of a spatial transcriptomics experiment. The interface validates uploaded AnnData files, reports exact overlap, selects a reproducible random panel, and clearly separates synthetic demo evaluation from facts about uploaded data.
+A local research prototype for preparing a gene panel for the next measurement round of a spatial transcriptomics experiment. The interface validates AnnData files, reports exact overlap, selects a reproducible random panel, and runs the repository's E7.5 reconstruction benchmark for the local mouse-embryo preset.
 
 ## Run locally
 
@@ -29,6 +29,24 @@ Open the Vite URL (normally `http://127.0.0.1:5173`). The frontend API URL defau
 
 Set `GENE_PANEL_MAX_UPLOAD_MB` to change the per-file upload limit (default 250 MB), `GENE_PANEL_DATA_DIR` to change temporary storage, and `GENE_PANEL_SESSION_TTL_SECONDS` to change the idle-session retention period (default 24 hours). Uploads are written to generated per-session directories, are not sent to external data services, and are removed after the session expires and a subsequent API request triggers cleanup, or when the session is explicitly deleted. Session IDs are unguessable capabilities; run the API on a trusted local network.
 
+## Trying it after cloning
+
+The repository does not include any datasets (`data/` is git-ignored), so a fresh clone can run the app in two ways:
+
+- **Without data:** click **Try synthetic example**, or upload your own `.h5ad` files. Gene selection and manual entry work; the `eval_team` benchmark and dummy methods are unavailable because they need the E7.5 files.
+- **With the E7.5 files:** place `GSM9046243_Embryo_E7.5_stereo_rep1.h5ad` and `GSM9046244_Embryo_E7.5_stereo_rep2.h5ad` (GEO series GSE278603) in `data/GSE278603_RAW/`, or set `MORPHO_DATA_DIR` to the folder that holds them, then click **Use E7.5 mouse embryo**.
+
+The benchmark runs on the CPU and needs the packages in `backend/requirements.txt` (including `scikit-learn`); PyTorch is not required. The API keeps sessions in memory, so run a single worker and keep it on a trusted local network.
+
+## Local E7.5 mouse embryo preset
+
+The landing page offers **Use E7.5 mouse embryo** to load the local spatial dataset and reference directly, while retaining the random selector. By default, the API looks in `data/GSE278603_RAW` at the repository root for:
+
+- `GSM9046243_Embryo_E7.5_stereo_rep1.h5ad` (spatial candidates)
+- `GSM9046244_Embryo_E7.5_stereo_rep2.h5ad` (reference for overlap)
+
+Set `MORPHO_DATA_DIR` to the directory containing both files if they are stored elsewhere. The preset validates the files and references them in place; it does not copy or delete the source datasets. It initializes the four-gene prior panel (`Fth1`, `Rpl8`, `Eif5a`, `Cox7c`), panel size 10, and seed 42. The spatial preview maps `x`, `y`, and `z` from `obs` and uses `celltype` when available. The selector remains behind the web selection adapter so it can be replaced when the adaptive method is ready.
+
 ## Input schema and mappings
 
 Both inputs must be readable `.h5ad` files with AnnData's observations × genes orientation: rows are cells/spots, columns are genes, and `X` or the selected numeric layer contains nonempty finite expression values. Observation names and the selected gene identifier field must be nonempty and unique. Numeric normalized or transformed expression is accepted; integer counts are not required.
@@ -39,13 +57,13 @@ Gene IDs default to `var_names`; an existing `var` column can be selected for ex
 
 Previous measurements must be provided explicitly by pasting IDs or uploading a simple CSV/TXT file. They are not inferred from expression matrix columns. Duplicate entries are counted once; exact matches are excluded, and unmatched IDs are reported.
 
-## Replace the demo methods
+## Demo selection method
 
-- Replace `backend/app/selection.py::select_genes` with the research selector. Keep it independent of API and UI code. It receives the validated spatial and reference AnnData objects, previous IDs, a prepared candidate pool, `Ng`, and seed.
-- Replace `backend/app/evaluation.py::evaluate_demo` with the evaluator. It receives the validated spatial and reference AnnData objects, previous IDs, `Ng`, seed, and selected genes.
-- Keep response keys and provenance explicit, or update the Pydantic response models and frontend types together.
+The method selector includes the web random panel and the `eval_team.dummy_method` marker, variable-gene, and random-expressed-gene baselines. The latter three run the repository's nearest-neighbour reconstruction against the local E7.5 pair and require gene counts in multiples of four. The `gene_recommender.py` adaptive expected-information-gain method is still a work in progress and is not used by the webpage. After choosing a method, use **I chose other genes** to enter a measured panel directly instead of accepting the recommended set.
 
-The random choice is reproducible for a fixed candidate set and seed. All “Demo score” values and the demo evaluation curve are deterministic synthetic placeholders; they are not information gain, calibrated uncertainty, probabilities, or evidence of biological usefulness. Dataset dimensions, identifier examples, coordinate previews, exact overlap, and exclusions are derived from uploaded data.
+The web random selector's row scores are deterministic synthetic ranking placeholders, not information gain or biological evidence. For every method, the local E7.5 benchmark reconstructs the embryo by matching each cell to its nearest cells in the reference embryo using all genes measured so far (previous rounds plus the new selection), so the reconstruction can improve as measured genes accumulate; measured genes keep their observed values. The eval_team dummy methods only choose genes. All methods use `eval_team.Evaluator` and a section-level experiment log so held-out scoring excludes measured genes. These are retrospective benchmark results on the local E7.5 data, not prospective performance guarantees. Uploaded and synthetic-example datasets do not receive fabricated evaluation scores.
+
+The repo benchmark can also report Peng and atlas reference scores when those reference tables have been prepared. See [eval_team/README.md](eval_team/README.md#setup) for the setup commands; the atlas preparation downloads a large external dataset. If the reference tables are absent, the webpage still shows the eval_team metrics that do not depend on them and identifies those omitted external scores.
 
 ## Current limitations
 
@@ -53,7 +71,7 @@ The random choice is reproducible for a fixed candidate set and seed. All “Dem
 - Validation scans expression values in bounded row chunks. Preview display is capped and sampled; the full matrix is never sent to the browser.
 - Orientation is shown as observations × genes and is never inferred from shape alone or automatically transposed. If the example IDs suggest a transposed object, the user can explicitly opt into a temporary transposed copy in the mapping controls, review the resulting IDs/coordinates, and switch back to the original.
 - Session metadata is held in API process memory; use one API worker for this prototype. Temporary files are cleaned on a later request after the configured idle TTL.
-- The evaluation is synthetic, and the random selector intentionally does not use expression, spatial coordinates, or the reference data.
+- The random selector intentionally does not use expression, spatial coordinates, or the reference data. Only the local E7.5 preset supports the repository benchmark; other datasets show evaluation as unavailable.
 
 ## Tests
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 import anndata as ad
@@ -10,6 +11,7 @@ from fastapi.testclient import TestClient
 from scipy import sparse
 
 from app import api
+from app import evaluation
 from app.candidates import prepare_candidates
 from app.data_io import validate_dataset
 from app.data_io import transpose_h5ad
@@ -259,7 +261,9 @@ def test_api_rejects_invalid_panel_sizes_and_returns_exact_panel(
     assert first_data["selected_genes"] == second_data["selected_genes"]
     assert "gA" not in {gene["gene_id"] for gene in first_data["selected_genes"]}
     assert first_data["reference_overlap_count"] == 4
-    assert first_data["evaluation"]["synthetic"] is True
+    assert first_data["evaluation"]["available"] is False
+    assert first_data["evaluation"]["synthetic"] is False
+    assert first_data["method"] == "random-demo-v1"
 
 
 def test_upload_errors_are_actionable(client: TestClient) -> None:
@@ -327,7 +331,263 @@ def test_example_data_runs_through_candidate_and_selection_apis(client: TestClie
     assert candidates.json()["reference_overlap_count"] == 16
     assert selection.status_code == 200
     assert len(selection.json()["selected_genes"]) == 5
+    assert selection.json()["evaluation"]["available"] is False
+    assert selection.json()["evaluation"]["synthetic"] is False
     assert example.json()["session_id"] in api.sessions
+
+
+def test_mouse_embryo_preset_uses_local_files_and_random_selection(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "mouse-data"
+    data_dir.mkdir()
+    spatial_path = data_dir / "GSM9046243_Embryo_E7.5_stereo_rep1.h5ad"
+    reference_path = data_dir / "GSM9046244_Embryo_E7.5_stereo_rep2.h5ad"
+    genes = ["Fth1", "Rpl8", "Eif5a", "Cox7c", *[f"g{index}" for index in range(10)]]
+    observations = pd.DataFrame(
+        {
+            "x": np.arange(5, dtype=float),
+            "y": np.arange(5, dtype=float) * 2,
+            "z": np.arange(5, dtype=float) * 3,
+            "celltype": ["a", "b", "a", "b", "a"],
+        },
+        index=[f"spatial_{index}" for index in range(5)],
+    )
+    ad.AnnData(
+        X=sparse.csr_matrix(np.arange(5 * len(genes), dtype=np.float32).reshape(5, len(genes))),
+        obs=observations,
+        var=pd.DataFrame(index=genes),
+    ).write_h5ad(spatial_path)
+    ad.AnnData(
+        X=sparse.csr_matrix(np.arange(5 * len(genes), dtype=np.float32).reshape(5, len(genes))),
+        obs=observations.drop(columns=["x", "y", "z"]).rename(
+            index=lambda value: value.replace("spatial_", "reference_")
+        ),
+        var=pd.DataFrame(index=genes),
+    ).write_h5ad(reference_path)
+    monkeypatch.setattr(api, "MOUSE_EMBRYO_DATA_DIR", data_dir)
+    evaluated: dict[str, object] = {}
+
+    def fake_evaluation(path: Path, reference: Path, measured_genes: list[str]) -> dict[str, object]:
+        evaluated["path"] = path
+        evaluated["genes"] = measured_genes
+        return {
+            "label": "eval_team E7.5 reconstruction benchmark",
+            "synthetic": False,
+            "available": True,
+            "notice": "mock benchmark result",
+            "metrics": [],
+        }
+
+    monkeypatch.setattr(api, "evaluate_mouse_embryo_baseline", fake_evaluation)
+
+    preset = client.post("/api/mouse-embryo")
+    assert preset.status_code == 200, preset.text
+    data = preset.json()
+    session_id = data["session_id"]
+    assert data["previous_genes"].splitlines() == ["Fth1", "Rpl8", "Eif5a", "Cox7c"]
+    assert data["panel_size"] == 10
+    assert data["seed"] == 42
+
+    session = client.get(f"/api/sessions/{session_id}").json()
+    spatial = session["datasets"]["spatial"]
+    assert spatial["coordinate_source"] == "obs"
+    assert spatial["coordinate_field"] == "x, y, z"
+    assert spatial["cell_type_field"] == "celltype"
+    stored_spatial = api.sessions[session_id].datasets["spatial"]
+    assert stored_spatial.path == spatial_path
+    assert np.array_equal(stored_spatial.coordinates, observations[["x", "y", "z"]].to_numpy())
+
+    candidates = client.post(
+        "/api/candidates",
+        json={"session_id": session_id, "previous_genes": data["previous_genes"].splitlines()},
+    )
+    selection = client.post(
+        "/api/select",
+        json={
+            "session_id": session_id,
+            "previous_genes": data["previous_genes"].splitlines(),
+            "ng": data["panel_size"],
+            "seed": data["seed"],
+        },
+    )
+    assert candidates.status_code == 200
+    assert candidates.json()["eligible_count"] == 10
+    assert selection.status_code == 200
+    assert selection.json()["method"] == "random-demo-v1"
+    assert len(selection.json()["selected_genes"]) == 10
+    assert selection.json()["evaluation"]["available"] is True
+    assert evaluated["path"] == spatial_path
+    assert set(evaluated["genes"]) == {
+        "Fth1",
+        "Rpl8",
+        "Eif5a",
+        "Cox7c",
+        *{gene["gene_id"] for gene in selection.json()["selected_genes"]},
+    }
+
+    def fake_dummy_method(
+        spatial_file: Path,
+        reference_file: Path,
+        how: str,
+        n_sets: int,
+        prior_genes: list[str],
+        seed: int,
+    ) -> tuple[list[str], dict[str, object]]:
+        assert spatial_file == spatial_path
+        assert reference_file == reference_path
+        assert how == "markers"
+        assert n_sets == 2
+        assert prior_genes == data["previous_genes"].splitlines()
+        assert seed == 42
+        return [f"g{index}" for index in range(8)], {
+            "label": "eval_team E7.5 reconstruction benchmark",
+            "synthetic": False,
+            "available": True,
+            "notice": "mock benchmark result",
+            "metrics": [],
+        }
+
+    monkeypatch.setattr(api, "run_eval_team_dummy_method", fake_dummy_method)
+    dummy_selection = client.post(
+        "/api/select",
+        json={
+            "session_id": session_id,
+            "previous_genes": data["previous_genes"].splitlines(),
+            "method": "dummy_markers",
+            "ng": 8,
+            "seed": 42,
+        },
+    )
+    assert dummy_selection.status_code == 200, dummy_selection.text
+    assert dummy_selection.json()["method"] == "eval-team-dummy_markers"
+    assert [gene["gene_id"] for gene in dummy_selection.json()["selected_genes"]] == [
+        f"g{index}" for index in range(8)
+    ]
+    assert all(gene["score"] is None for gene in dummy_selection.json()["selected_genes"])
+
+    deleted = client.delete(f"/api/sessions/{session_id}")
+    assert deleted.json()["deleted"] is True
+    assert spatial_path.is_file()
+    assert reference_path.is_file()
+
+
+def test_mouse_embryo_preset_reports_missing_local_files(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "MOUSE_EMBRYO_DATA_DIR", tmp_path / "missing")
+
+    response = client.post("/api/mouse-embryo")
+
+    assert response.status_code == 503
+    assert "MORPHO_DATA_DIR" in response.json()["detail"]
+
+
+def test_user_chosen_genes_are_returned_without_synthetic_scores(client: TestClient) -> None:
+    example = client.post("/api/example").json()
+    session_id = example["session_id"]
+
+    selected = client.post(
+        "/api/select",
+        json={
+            "session_id": session_id,
+            "method": "manual",
+            "chosen_genes": ["Gene-05", "Gene-02", "Gene-05"],
+            "ng": 2,
+            "seed": 42,
+        },
+    )
+    unknown = client.post(
+        "/api/select",
+        json={
+            "session_id": session_id,
+            "method": "manual",
+            "chosen_genes": ["not-a-gene"],
+            "ng": 1,
+        },
+    )
+
+    assert selected.status_code == 200
+    assert selected.json()["method"] == "manual-genes"
+    assert [gene["gene_id"] for gene in selected.json()["selected_genes"]] == ["Gene-05", "Gene-02"]
+    assert all(gene["score"] is None for gene in selected.json()["selected_genes"])
+    assert selected.json()["evaluation"]["available"] is False
+    assert unknown.status_code == 422
+    assert "not found in the spatial dataset" in unknown.json()["detail"]
+
+
+def test_eval_team_baseline_scores_only_measured_genes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    truth_path = tmp_path / "truth.h5ad"
+    genes = ["Fth1", "gA", "gB", "gC"]
+    obs = pd.DataFrame(
+        {
+            "x": [0.0, 1.0, 2.0, 3.0],
+            "y": [0.0, 1.0, 2.0, 3.0],
+            "z": [0.0, 1.0, 2.0, 3.0],
+            "celltype": ["a", "a", "b", "b"],
+            "germ_layer": ["ecto", "ecto", "meso", "meso"],
+        },
+        index=[f"cell-{index}" for index in range(4)],
+    )
+    ad.AnnData(
+        X=sparse.csr_matrix(np.arange(16, dtype=np.float32).reshape(4, 4)),
+        obs=obs,
+        var=pd.DataFrame(index=genes),
+    ).write_h5ad(truth_path)
+    captured: dict[str, object] = {}
+
+    class FakeEvaluator:
+        def __init__(self, truth: ad.AnnData) -> None:
+            captured["truth"] = truth
+            self.regions = type("Regions", (), {"refs": {"peng": object()}})()
+
+        def evaluate(
+            self, reconstruction: ad.AnnData, log: pd.DataFrame
+        ) -> tuple[dict[str, float | int], dict[str, object]]:
+            captured["reconstruction"] = reconstruction
+            captured["log"] = log
+            return {
+                "truth_region_spearman": 0.25,
+                "heldout_corr": 0.5,
+                "celltype_tv": 0.2,
+                "celltype_balanced_accuracy": 0.75,
+            }, {}
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
+    eval_module = importlib.import_module("eval_team.evaluate")
+    monkeypatch.setattr(eval_module, "Evaluator", FakeEvaluator)
+    reference_path = tmp_path / "reference.h5ad"
+    ad.AnnData(
+        # Reference cells match target cells on Fth1/gA; gB/gC differ so predictions are identifiable.
+        X=sparse.csr_matrix(np.array(
+            [[0, 1, 100, 200], [4, 5, 300, 400], [8, 9, 500, 600], [12, 13, 700, 800]], dtype=np.float32
+        )),
+        obs=pd.DataFrame(index=[f"ref-{index}" for index in range(4)]),
+        var=pd.DataFrame(index=genes),
+    ).write_h5ad(reference_path)
+    result = evaluation.evaluate_mouse_embryo_baseline(truth_path, reference_path, ["Fth1", "gA", "missing"])
+
+    reconstruction = captured["reconstruction"]
+    log = captured["log"]
+    assert reconstruction.var_names.tolist() == genes
+    dense = reconstruction.X.toarray()
+    truth_values = np.arange(16, dtype=np.float32).reshape(4, 4)
+    np.testing.assert_array_equal(dense[:, :2], truth_values[:, :2])
+    # Only four reference cells exist, so each prediction is their mean (not zero).
+    np.testing.assert_allclose(dense[:, 2], 400)
+    np.testing.assert_allclose(dense[:, 3], 500)
+    assert log["genes"].tolist() == ["Fth1;gA"] * 4
+    assert result["available"] is True
+    assert result["synthetic"] is False
+    assert result["experiment_count"] == 4
+    assert {metric["id"]: metric["value"] for metric in result["metrics"]} == {
+        "truth_region_spearman": 0.25,
+        "heldout_corr": 0.5,
+        "celltype_tv": 0.2,
+        "celltype_balanced_accuracy": 0.75,
+    }
 
 
 def test_expression_previews_use_real_values_and_report_missing_genes(client: TestClient) -> None:

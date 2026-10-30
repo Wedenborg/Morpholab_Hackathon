@@ -9,6 +9,8 @@ import type {
   MappingForm,
   MappingOptions,
   PreviewResponse,
+  PresetSessionResponse,
+  SelectionMethod,
   SelectedGene,
   SelectionResponse,
 } from "./types";
@@ -35,12 +37,42 @@ function splitGenes(text: string) {
   return [...new Set(text.split(/[\n,;\t]+/).map((value) => value.trim()).filter(Boolean))];
 }
 
+function selectionMethodFromValue(value: string): SelectionMethod {
+  switch (value) {
+    case "dummy_markers":
+    case "dummy_variance":
+    case "dummy_random":
+    case "manual":
+      return value;
+    default:
+      return "random";
+  }
+}
+
 function fileToMappingOptions(summary: DatasetSummary): MappingOptions {
   return {
     gene_fields: ["var_names", ...summary.gene_columns],
     layers: ["X", ...summary.layer_names],
     obsm: summary.obsm_keys,
     obs_columns: summary.observation_columns,
+  };
+}
+
+function mappingForSummary(summary: DatasetSummary): MappingForm {
+  const coordinateSource = summary.coordinate_source === "obs" ? "obs" : "obsm";
+  const coordinateField = summary.coordinate_field ?? "spatial";
+  return {
+    ...initialMapping(summary.kind),
+    gene_field: summary.gene_field,
+    display_field: summary.display_field,
+    matrix_layer: summary.matrix_layer,
+    coordinate_source: coordinateSource,
+    coordinate_field: coordinateSource === "obsm" ? coordinateField : "spatial",
+    coordinate_columns: coordinateSource === "obs"
+      ? coordinateField.split(",").map((column) => column.trim()).filter(Boolean)
+      : [],
+    cell_type_field: summary.cell_type_field ?? "",
+    transpose: summary.transpose_applied,
   };
 }
 
@@ -54,7 +86,7 @@ function download(filename: string, contents: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
-function csvEscape(value: string | number) {
+function csvEscape(value: string | number | null) {
   return `"${String(value).replaceAll('"', '""')}"`;
 }
 
@@ -213,7 +245,7 @@ function ResultsTable({
                 <td>{String(gene.rank).padStart(2, "0")}</td>
                 <td className="gene-name">{gene.display_name}</td>
                 <td><code>{gene.gene_id}</code></td>
-                <td><span className="score-value">{gene.score.toFixed(3)}</span></td>
+                <td><span className="score-value">{gene.score === null ? "—" : gene.score.toFixed(3)}</span></td>
               </tr>
             ))}
             {!filtered.length && <tr><td colSpan={4} className="empty-table">No selected genes match this search.</td></tr>}
@@ -255,29 +287,48 @@ function ExpressionPreview({ label, preview }: { label: string; preview: Preview
 }
 
 function EvaluationPanel({ result }: { result: SelectionResponse }) {
-  const points = result.evaluation.points;
-  const width = 520;
-  const height = 150;
-  const min = Math.min(...points.map((point) => point.value));
-  const max = Math.max(...points.map((point) => point.value));
-  const y = (value: number) => height - 20 - ((value - min) / Math.max(max - min, 0.001)) * (height - 46);
-  const path = points.map((point, index) => `${index ? "L" : "M"} ${36 + index * 108} ${y(point.value)}`).join(" ");
   return (
     <section className="evaluation-panel">
       <div className="evaluation-head">
-        <div><span className="demo-label"><span /> Dedicated demo evaluation</span><h3>{result.evaluation.label}</h3></div>
-        <span className="synthetic-tag">SYNTHETIC</span>
+        <div><span className="demo-label"><span /> Repository benchmark</span><h3>{result.evaluation.label}</h3></div>
+        <span className="benchmark-tag">{result.evaluation.available ? "EVAL_TEAM" : "NOT RUN"}</span>
       </div>
       <p>{result.evaluation.notice}</p>
-      <div className="evaluation-chart">
-        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${result.evaluation.metric} over demo rounds`}>
-          {[0, 1, 2, 3].map((line) => <line key={line} x1="30" x2="500" y1={20 + line * 34} y2={20 + line * 34} className="chart-grid" />)}
-          <path d={path} className="chart-path" />
-          {points.map((point, index) => <g key={point.round}><circle cx={36 + index * 108} cy={y(point.value)} r="4" className="chart-point" /><text x={36 + index * 108} y="145" textAnchor="middle">Round {point.round}</text></g>)}
-        </svg>
-        <span className="chart-axis-label">{result.evaluation.metric}</span>
-      </div>
-      <div className="evaluation-values">{points.map((point) => <span key={point.round}>R{point.round} <strong>{point.value.toFixed(3)}</strong></span>)}</div>
+      {result.evaluation.available ? (
+        <>
+          <div className="evaluation-metrics">
+            {result.evaluation.metrics.map((metric) => (
+              <article className="evaluation-metric" key={metric.id}>
+                <span>{metric.label}</span>
+                <strong>{metric.value.toFixed(3)}</strong>
+                <small>{metric.description}</small>
+                {metric.true_data !== null && (
+                  <small>True-data reference: {metric.true_data.toFixed(3)}</small>
+                )}
+              </article>
+            ))}
+          </div>
+          <div className="evaluation-meta">
+            {result.evaluation.measured_gene_count !== undefined && (
+              <span>{result.evaluation.measured_gene_count} measured genes</span>
+            )}
+            {result.evaluation.experiment_count !== undefined && (
+              <span>{result.evaluation.experiment_count.toLocaleString()} logged section experiments</span>
+            )}
+            {result.evaluation.external_references?.length ? (
+              <span>External references: {result.evaluation.external_references.join(", ")}</span>
+            ) : null}
+          </div>
+          {result.evaluation.summary && (
+            <details className="evaluation-details">
+              <summary>Full eval_team report</summary>
+              <pre>{JSON.stringify(result.evaluation.summary, null, 2)}</pre>
+            </details>
+          )}
+        </>
+      ) : (
+        <p className="evaluation-unavailable">This run has no benchmark scores.</p>
+      )}
     </section>
   );
 }
@@ -294,8 +345,13 @@ export default function App() {
   const [mappingDirty, setMappingDirty] = useState<DatasetMap<boolean>>({ spatial: false, reference: false });
   const [previousText, setPreviousText] = useState("");
   const [panelSize, setPanelSize] = useState("5");
+  const [selectionMethod, setSelectionMethod] = useState<SelectionMethod>("random");
+  const [e75Preset, setE75Preset] = useState(false);
+  const [manualMode, setManualMode] = useState(false);
+  const [chosenGenesText, setChosenGenesText] = useState("");
   const [seedText, setSeedText] = useState("");
   const [result, setResult] = useState<SelectionResponse | null>(null);
+  const [addedToPrevious, setAddedToPrevious] = useState(0);
   const [selectedGene, setSelectedGene] = useState<SelectedGene | null>(null);
   const [search, setSearch] = useState("");
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
@@ -308,6 +364,7 @@ export default function App() {
   const [technicalError, setTechnicalError] = useState("");
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [exampleBusy, setExampleBusy] = useState(false);
+  const [mouseBusy, setMouseBusy] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -330,12 +387,19 @@ export default function App() {
   const previous = useMemo(() => splitGenes(previousText), [previousText]);
   const eligibleCount = candidateSummary?.eligible_count ?? 0;
   const allReady = Boolean(datasets.spatial?.valid && datasets.reference?.valid);
+  const isEvalTeamMethod = selectionMethod.startsWith("dummy_");
+  const evalTeamMethodReady = e75Preset
+    && mappings.spatial.gene_field === "var_names"
+    && mappings.spatial.matrix_layer === "X"
+    && !mappings.spatial.transpose;
   const parsedNg = Number(panelSize);
-  const ngValid = Number.isInteger(parsedNg) && parsedNg > 0 && parsedNg <= eligibleCount;
+  const ngValid = Number.isInteger(parsedNg) && parsedNg > 0 && parsedNg <= eligibleCount
+    && (!isEvalTeamMethod || (evalTeamMethodReady && parsedNg % 4 === 0));
   const parsedSeed = Number(seedText);
   const seedValid = !seedText.trim() || Number.isSafeInteger(parsedSeed);
   const validForSelection = allReady && ngValid && seedValid && Boolean(sessionId)
-    && !mappingDirty.spatial && !mappingDirty.reference && !busy.spatial && !busy.reference && !exampleBusy;
+    && !mappingDirty.spatial && !mappingDirty.reference && !busy.spatial && !busy.reference
+    && !exampleBusy && !mouseBusy && (!isEvalTeamMethod || evalTeamMethodReady);
 
   useEffect(() => {
     if (!sessionId || !datasets.spatial?.valid || !datasets.reference?.valid) {
@@ -354,6 +418,7 @@ export default function App() {
 
   function clearResults() {
     setResult(null);
+    setAddedToPrevious(0);
     setSelectedGene(null);
     setReferencePreview(null);
     setSpatialGenePreview(null);
@@ -384,6 +449,9 @@ export default function App() {
     try {
       const currentMapping = mappings[kind];
       const response = await api.upload(sessionId, kind, file, currentMapping);
+      setE75Preset(false);
+      setSelectionMethod("random");
+      setManualMode(false);
       setDatasets((current) => ({ ...current, [kind]: response.dataset }));
       setOptions((current) => ({ ...current, [kind]: response.mapping_options }));
       setMappings((current) => ({ ...current, [kind]: currentMapping }));
@@ -417,36 +485,67 @@ export default function App() {
     }
   }
 
-  async function tryExample() {
-    setExampleBusy(true);
+  async function installPreset(
+    response: PresetSessionResponse,
+    defaultPanelSize: string,
+    defaultSeed: string,
+    isMouseEmbryo = false,
+  ) {
+    const sessionResponse = await api.getSession(response.session_id);
+    const spatial = sessionResponse.datasets.spatial;
+    const reference = sessionResponse.datasets.reference;
+    if (!spatial || !reference) throw new Error("The selected datasets did not pass validation.");
+    setSessionId(response.session_id);
+    setDatasets({ spatial, reference });
+    setOptions({
+      spatial: fileToMappingOptions(spatial),
+      reference: fileToMappingOptions(reference),
+    });
+    setMappings({
+      spatial: mappingForSummary(spatial),
+      reference: mappingForSummary(reference),
+    });
+    setMappingDirty({ spatial: false, reference: false });
+    setPreviousText(response.previous_genes);
+    setPanelSize(String(response.panel_size ?? defaultPanelSize));
+    setSeedText(String(response.seed ?? defaultSeed));
+    setE75Preset(isMouseEmbryo);
+    setSelectionMethod("random");
+    setManualMode(false);
+  }
+
+  function preparePreset() {
     setError("");
     setTechnicalError("");
     clearResults();
     setPreview(null);
     setPreviewLoading(false);
+    setE75Preset(false);
+    setSelectionMethod("random");
+    setManualMode(false);
+  }
+
+  async function tryExample() {
+    setExampleBusy(true);
+    preparePreset();
     try {
-      const response = await api.example();
-      const sessionResponse = await api.getSession(response.session_id);
-      const spatial = sessionResponse.datasets.spatial;
-      const reference = sessionResponse.datasets.reference;
-      if (!spatial || !reference) throw new Error("Example datasets did not pass validation.");
-      const spatialOptions = fileToMappingOptions(spatial);
-      const referenceOptions = fileToMappingOptions(reference);
-      setSessionId(response.session_id);
-      setDatasets({ spatial, reference });
-      setOptions({ spatial: spatialOptions, reference: referenceOptions });
-      setMappings({
-        spatial: { ...initialMapping("spatial"), cell_type_field: "cell_type" },
-        reference: { ...initialMapping("reference"), cell_type_field: "cell_type" },
-      });
-      setMappingDirty({ spatial: false, reference: false });
-      setPreviousText(response.previous_genes);
-      setPanelSize("5");
-      setSeedText("42");
+      await installPreset(await api.example(), "5", "42");
     } catch (failure) {
       setErrorState(failure);
     } finally {
       setExampleBusy(false);
+    }
+  }
+
+  async function tryMouseEmbryo() {
+    setMouseBusy(true);
+    preparePreset();
+    try {
+      await installPreset(await api.mouseEmbryo(), "10", "42", true);
+    } catch (failure) {
+      setErrorState(failure);
+    } finally {
+      setMouseBusy(false);
     }
   }
 
@@ -460,8 +559,7 @@ export default function App() {
     clearResults();
   }
 
-  async function runSelection() {
-    if (!validForSelection) return;
+  async function submitSelection(method: SelectionMethod, ng: number, chosenGenes: string[] = []) {
     setSelectionBusy(true);
     setError("");
     setTechnicalError("");
@@ -470,16 +568,35 @@ export default function App() {
       const response = await api.select({
         session_id: sessionId,
         previous_genes: previous,
-        ng: parsedNg,
+        method,
+        chosen_genes: chosenGenes,
+        ng,
         seed: seedText.trim() ? parsedSeed : null,
       });
       setResult(response);
       setSelectedGene(response.selected_genes[0] ?? null);
+      // Treat this round's genes as measured so the next round builds on them.
+      const known = new Set(previous);
+      const added = response.selected_genes.map((gene) => gene.gene_id).filter((id) => !known.has(id));
+      if (added.length) setPreviousText([...previous, ...added].join("\n"));
+      setAddedToPrevious(added.length);
+      if (method === "manual") setChosenGenesText("");
     } catch (failure) {
       setErrorState(failure);
     } finally {
       setSelectionBusy(false);
     }
+  }
+
+  function runSelection() {
+    if (!validForSelection) return;
+    void submitSelection(selectionMethod, parsedNg);
+  }
+
+  function runChosenSelection() {
+    const chosenGenes = splitGenes(chosenGenesText);
+    if (!sessionId || !allReady || !chosenGenes.length) return;
+    void submitSelection("manual", chosenGenes.length, chosenGenes);
   }
 
   useEffect(() => {
@@ -547,7 +664,7 @@ export default function App() {
     download("gene-panel-run-summary.json", `${JSON.stringify(result.run_summary, null, 2)}\n`, "application/json");
   }
 
-  const filteredChartGenes = result?.selected_genes.slice(0, 8) ?? [];
+  const filteredChartGenes = result?.selected_genes.filter((gene) => gene.score !== null).slice(0, 8) ?? [];
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -566,11 +683,16 @@ export default function App() {
           <div className="intro-copy">
             <div className="eyebrow">SPATIAL TRANSCRIPTOMICS · PANEL DESIGN</div>
             <h1>Plan your next<br /><em>measurement round.</em></h1>
-            <p>Prepare a gene panel from your spatial data, check dataset overlap, and explore a transparent demo selection.</p>
+            <p>Start with the locally available E7.5 mouse embryo datasets or upload your own, then plan a reproducible random gene panel.</p>
           </div>
-          <button className="button button-example" onClick={() => void tryExample()} disabled={exampleBusy}>
-            <span aria-hidden="true">✳</span>{exampleBusy ? "Loading example…" : "Try example data"}
-          </button>
+          <div className="intro-actions">
+            <button className="button button-example" onClick={() => void tryMouseEmbryo()} disabled={exampleBusy || mouseBusy}>
+              <span aria-hidden="true">M</span>{mouseBusy ? "Loading E7.5 datasets…" : "Use E7.5 mouse embryo"}
+            </button>
+            <button className="button button-example button-example-secondary" onClick={() => void tryExample()} disabled={exampleBusy || mouseBusy}>
+              {exampleBusy ? "Loading synthetic example…" : "Try synthetic example"}
+            </button>
+          </div>
         </section>
 
         <nav className="workflow" aria-label="Workflow stages">
@@ -590,7 +712,7 @@ export default function App() {
         <section className="workflow-section" id="data">
           <div className="section-heading">
             <div className="stage-number">01</div>
-            <div><div className="eyebrow">UPLOAD AND CHECK DATA</div><h2>Start with your datasets</h2><p>Both files are checked before any genes can be selected. Data stays in this app’s temporary session storage.</p></div>
+            <div><div className="eyebrow">UPLOAD AND CHECK DATA</div><h2>Start with your datasets</h2><p>Both files are checked before any genes can be selected. Uploads use temporary session storage; the local preset references source files in place.</p></div>
           </div>
           <div className="dataset-grid">
             <UploadCard
@@ -674,18 +796,50 @@ export default function App() {
               )}
             </div>
             <div className="panel-settings">
-              <div className="field-heading"><label htmlFor="ng-input">Additional genes to select</label><span className="required">Required</span></div>
+              <label className="method-select-label" htmlFor="selection-method">Selection method</label>
+              <select
+                id="selection-method"
+                value={selectionMethod}
+                onChange={(event) => {
+                  const nextMethod = selectionMethodFromValue(event.target.value);
+                  setSelectionMethod(nextMethod);
+                  if (nextMethod.startsWith("dummy_") && parsedNg % 4 !== 0) {
+                    setPanelSize(String(Math.max(4, Math.floor(parsedNg / 4) * 4)));
+                  }
+                  clearResults();
+                }}
+              >
+                <option value="random">Web random panel</option>
+                <option value="dummy_markers" disabled={!evalTeamMethodReady}>eval_team dummy · cell-type markers</option>
+                <option value="dummy_variance" disabled={!evalTeamMethodReady}>eval_team dummy · variable genes</option>
+                <option value="dummy_random" disabled={!evalTeamMethodReady}>eval_team dummy · random expressed genes</option>
+              </select>
+              <p className="helper-text">
+                {isEvalTeamMethod
+                  ? "Uses the repository dummy reconstruction method. These methods measure genes in groups of four."
+                  : "The web random selector samples spatial genes without replacement. Select the local E7.5 preset to enable eval_team dummy methods."}
+              </p>
+              <div className="field-heading">
+                <label htmlFor="ng-input">{isEvalTeamMethod ? "Genes to measure (sets of four)" : "Additional genes to select"}</label>
+                <span className="required">Required</span>
+              </div>
               <input
                 id="ng-input"
                 type="number"
-                min="1"
-                max={eligibleCount || undefined}
-                step="1"
+                min={isEvalTeamMethod ? "4" : "1"}
+                max={isEvalTeamMethod ? Math.floor(eligibleCount / 4) * 4 || undefined : eligibleCount || undefined}
+                step={isEvalTeamMethod ? "4" : "1"}
                 value={panelSize}
                 onChange={(event) => { setPanelSize(event.target.value); clearResults(); }}
                 aria-invalid={Boolean(datasets.spatial && !ngValid)}
               />
-              {datasets.spatial && !ngValid && <p className="input-error" role="alert">Enter a whole number from 1 to {eligibleCount} eligible genes.</p>}
+              {datasets.spatial && !ngValid && (
+                <p className="input-error" role="alert">
+                  {isEvalTeamMethod
+                    ? `Enter a multiple of 4 from 4 to ${Math.floor(eligibleCount / 4) * 4} genes.`
+                    : `Enter a whole number from 1 to ${eligibleCount} eligible genes.`}
+                </p>
+              )}
               <div className="pool-summary">
                 <div><span>Candidate genes</span><strong>{candidateSummary?.candidate_count.toLocaleString() ?? "—"}</strong></div>
                 <div><span>Previous IDs supplied</span><strong>{candidateSummary?.previous_count.toLocaleString() ?? "—"}</strong></div>
@@ -699,12 +853,45 @@ export default function App() {
               </details>
               <div className="method-note">
                 <span className="method-mark">↗</span>
-                <span><strong>Demo method</strong> · reproducible random sampling<br />The reference dataset is validated but is not used to filter or rank candidates.</span>
+                <span>
+                  <strong>{isEvalTeamMethod ? "eval_team dummy method" : "Web random method"}</strong>
+                  {isEvalTeamMethod
+                    ? " · reconstructs from the reference embryo with nearest-neighbour matching."
+                    : " · reproducible random sampling; the reference does not filter candidates."}
+                </span>
               </div>
               <button className="button button-primary run-button" disabled={!validForSelection || selectionBusy} onClick={() => void runSelection()}>
-                {selectionBusy ? <><span className="spinner" /> Selecting genes…</> : "Select next-round genes"}
+                {selectionBusy ? <><span className="spinner" /> Running method and benchmark…</> : "Select next-round genes"}
                 {!selectionBusy && <span aria-hidden="true">→</span>}
               </button>
+              <button
+                className="button button-outline other-genes-toggle"
+                type="button"
+                onClick={() => { setManualMode((current) => !current); clearResults(); }}
+              >
+                {manualMode ? "Cancel other genes" : "I chose other genes"}
+              </button>
+              {manualMode && (
+                <div className="chosen-genes-form">
+                  <label htmlFor="chosen-genes">Genes you chose</label>
+                  <textarea
+                    id="chosen-genes"
+                    rows={4}
+                    value={chosenGenesText}
+                    onChange={(event) => { setChosenGenesText(event.target.value); clearResults(); }}
+                    placeholder={"Enter gene IDs, separated by commas or new lines"}
+                  />
+                  <p className="helper-text">The exact genes you enter will be evaluated as your chosen panel. IDs must match the spatial dataset.</p>
+                  <button
+                    className="button button-primary"
+                    type="button"
+                    disabled={!allReady || !sessionId || !splitGenes(chosenGenesText).length || selectionBusy}
+                    onClick={runChosenSelection}
+                  >
+                    {selectionBusy ? "Evaluating your genes…" : "Evaluate my chosen genes"}
+                  </button>
+                </div>
+              )}
               {!allReady && <p className="helper-text centered">Upload and validate both datasets to continue.</p>}
             </div>
           </div>
@@ -724,7 +911,7 @@ export default function App() {
           ) : (
             <div className="results-content">
               <div className="result-banner">
-                <div><span className="demo-label"><span /> Demo method</span><h3>{result.selected_genes.length} genes selected for the next measurement round</h3>
+                <div><span className="demo-label"><span /> {result.method_label}</span><h3>{result.selected_genes.length} genes selected for the next measurement round</h3>
                   <span>Seed {result.seed} · {result.eligible_count.toLocaleString()} eligible from {result.candidate_count.toLocaleString()} spatial genes</span>
                 </div>
                 <div className="export-buttons">
@@ -733,6 +920,9 @@ export default function App() {
                   <button className="button button-outline" onClick={exportSummary}>↓ Run JSON</button>
                 </div>
               </div>
+              {addedToPrevious > 0 && (
+                <div className="unmatched-note"><strong>{addedToPrevious} gene(s) added to “Previously measured genes”.</strong><span>The next selection will exclude them and use them as already measured.</span></div>
+              )}
               <div className="results-grid">
                 <section className="result-panel chart-panel">
                   <div className="panel-title"><div><div className="eyebrow">ORDERED BY DEMO SCORE</div><h3>Selection scores</h3></div><span className="demo-score-tag">DEMO SCORE</span></div>
@@ -740,22 +930,23 @@ export default function App() {
                     {filteredChartGenes.map((gene) => (
                       <button key={gene.gene_id} className={`bar-row ${selectedGene?.gene_id === gene.gene_id ? "bar-selected" : ""}`} onClick={() => setSelectedGene(gene)}>
                         <span className="bar-label">{gene.display_name}</span>
-                        <span className="bar-track"><i style={{ width: `${gene.score * 100}%` }} /></span>
-                        <span className="bar-number">{gene.score.toFixed(3)}</span>
+                        <span className="bar-track"><i style={{ width: `${(gene.score ?? 0) * 100}%` }} /></span>
+                        <span className="bar-number">{gene.score?.toFixed(3)}</span>
                       </button>
                     ))}
+                    {!filteredChartGenes.length && <p className="helper-text">This method does not assign per-gene scores.</p>}
                   </div>
-                  <p className="helper-text">Synthetic deterministic scores; future expected information gain is not implemented.</p>
+                  {filteredChartGenes.length > 0 && <p className="helper-text">Synthetic deterministic ranking scores; not biological utility or information gain.</p>}
                 </section>
                 <section className="result-panel detail-panel">
                   <div className="panel-title"><div><div className="eyebrow">GENE DETAIL</div><h3>{selectedGene?.display_name ?? "Select a gene"}</h3></div></div>
                   {selectedGene ? (
                     <>
                       <div className="gene-meta"><span>Stable ID</span><code>{selectedGene.gene_id}</code><span>Rank</span><strong>#{selectedGene.rank}</strong></div>
-                      <p className="detail-score"><span>Demo score</span><strong>{selectedGene.score.toFixed(4)}</strong></p>
+                      <p className="detail-score"><span>Method score</span><strong>{selectedGene.score?.toFixed(4) ?? "Not assigned"}</strong></p>
                       <ExpressionPreview label="Spatial dataset" preview={spatialGenePreview} />
                       <ExpressionPreview label="Reference dataset" preview={referencePreview} />
-                      <p className="detail-notice">Expression values are real sampled values from the uploaded matrix where available. Scores are synthetic.</p>
+                      <p className="detail-notice">Expression values are sampled from the datasets where available. Any displayed random-panel ranking score is synthetic.</p>
                     </>
                   ) : <p className="helper-text">Choose a gene above to inspect its identifier and data availability.</p>}
                 </section>
@@ -775,7 +966,7 @@ export default function App() {
         </section>
         <section className="about-demo" id="about">
           <span className="about-mark">i</span>
-          <div><strong>About this prototype</strong><p>“Next round” means the next measurement round, not a prediction of biological change over time. The candidate universe is the spatial dataset’s selected gene identifiers; reference-only genes are not added. The random selector and demo evaluation are placeholders.</p></div>
+          <div><strong>About this prototype</strong><p>“Next round” means the next measurement round, not a prediction of biological change over time. The candidate universe is the spatial dataset’s selected gene identifiers; reference-only genes are not added. Gene-row scores are synthetic ranking placeholders. For the local E7.5 preset, reconstruction metrics come from the repository’s eval_team benchmark; other datasets are not given fabricated evaluation scores.</p></div>
         </section>
       </main>
       <footer><span>FIELDNOTE · GENE PANEL PLANNER</span><span>Prototype for research workflows</span></footer>
