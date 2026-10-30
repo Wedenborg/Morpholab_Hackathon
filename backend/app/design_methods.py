@@ -74,6 +74,10 @@ class FactorModel:
     b: np.ndarray                    # gene means
     detect: np.ndarray               # fraction of visible cells with a nonzero value
     q: np.ndarray                    # eigenvalues of the target's prior precision Q
+    U: np.ndarray                    # its eigenvectors (target neighbourhoods x target neighbourhoods)
+    target_units: np.ndarray         # neighbourhood of each target cell
+    sigma_delta: np.ndarray          # spread of cells around their neighbourhood, in factor space
+    r_cell: np.ndarray               # cell-level noise per gene
     n_visible_units: int
 
     @property
@@ -235,10 +239,56 @@ def fit(visible: Expression, target_coordinates: np.ndarray, seed: int = 0,
     r = (R - Z @ W.T).var(0)
     floor = 0.01 * np.median(r[r > 0]) if np.any(r > 0) else 1e-6
     r = np.maximum(r, floor)
+    sigma_delta, r_cell = _cell_terms(visible.X, units, Z, W, b)
     t_units, t_section = neighbourhoods(target_coordinates, seed)
     centroids = np.vstack([target_coordinates[t_units == u].mean(0) for u in range(t_units.max() + 1)])
-    q, _ = prior_eigen(centroids, t_section)
-    return FactorModel(W, r, b, detect, q, int(n_units))
+    q, U = prior_eigen(centroids, t_section)
+    return FactorModel(W, r, b, detect, q, U, t_units, sigma_delta, r_cell, int(n_units))
+
+
+def _cell_terms(X: sp.csr_matrix, units: np.ndarray, Z: np.ndarray, W: np.ndarray, b: np.ndarray
+                ) -> tuple[np.ndarray, np.ndarray]:
+    """Cells of the visible embryo projected on the factors: their spread around their
+    neighbourhood (Sigma_delta) and the per-gene noise left at the cell level (theory.md 1)."""
+    P = W @ np.linalg.pinv(W.T @ W)                                  # genes x K
+    Zc = np.asarray(X @ P) - b @ P
+    sigma_delta = np.atleast_2d(np.cov((Zc - Z[units]).T))
+    r_cell = np.empty(W.shape[0])
+    for start in range(0, W.shape[0], 2000):
+        cols = slice(start, start + 2000)
+        r_cell[cols] = (X[:, cols].toarray() - b[cols] - Zc @ W[cols].T).var(0)
+    floor = 0.01 * np.median(r_cell[r_cell > 0]) if np.any(r_cell > 0) else 1e-6
+    return sigma_delta, np.maximum(r_cell, floor)
+
+
+def reconstruct(model: FactorModel, measured: list[int], values: np.ndarray) -> np.ndarray:
+    """Reconstruct every target cell and gene from measured genes (theory.md sections 3 and 4).
+
+    values: target cells x len(measured), log scale. Every cell carries the same genes, so the
+    posterior of the neighbourhood factors is computed in Q's eigenbasis; each cell is then
+    corrected by its own measured values, the output is max(0, b + W z), and measured entries
+    keep their measured values."""
+    n_cells, units = len(model.target_units), model.target_units
+    n_units = len(model.q)
+    if not measured:
+        return np.tile(np.maximum(model.b, 0).astype(np.float32), (n_cells, 1))
+    Wm, rm, bm = model.W[measured], model.r[measured], model.b[measured]
+    M = sp.csr_matrix((np.ones(n_cells), (units, np.arange(n_cells))), shape=(n_units, n_cells))
+    averages = np.asarray(sp.diags(1 / np.asarray(M.sum(1)).ravel()) @ M @ values)
+    h = (averages - bm) @ (Wm / rm[:, None])                          # n x K
+    A = _precision_inverses(model, measured)                          # n x K x K, in Q's eigenbasis
+    mean = model.U @ np.einsum("jkl,jl->jk", A, model.U.T @ h)        # posterior mean per neighbourhood
+    cov = np.einsum("uj,jkl->ukl", model.U ** 2, A)                   # posterior covariance per neighbourhood
+    Z = mean[units].copy()
+    noise = np.diag(model.r_cell[measured])
+    for u in range(n_units):
+        rows = np.where(units == u)[0]
+        C = cov[u] + model.sigma_delta
+        gain = C @ Wm.T @ np.linalg.inv(Wm @ C @ Wm.T + noise)
+        Z[rows] += (values[rows] - bm - mean[u] @ Wm.T) @ gain.T
+    X = np.clip(Z @ model.W.T + model.b, 0, None).astype(np.float32)
+    X[:, measured] = values
+    return X
 
 
 def _precision_inverses(model: FactorModel, measured: list[int]) -> np.ndarray:
@@ -354,7 +404,7 @@ def explained(model: FactorModel, measured: list[int]) -> float:
 def run(method: str, visible: Expression, mdcla: Expression | None, target_coordinates: np.ndarray,
         target_genes: list[str], previous: list[str], eligible_ids: list[str], ng: int, rounds: int,
         seed: int, display_names: dict[str, str],
-        score_round: Callable[[list[str]], dict[str, Any]] | None = None,
+        score_round: Callable[[list[str], FactorModel], dict[str, Any]] | None = None,
         ) -> tuple[list[SelectedGene], list[dict[str, Any]], dict[str, Any]]:
     """Select ng genes, then simulate rounds - 1 further rounds of the same method. Returns the
     selected genes, one record per round (round 0 = previous genes only) and model facts."""
@@ -362,12 +412,15 @@ def run(method: str, visible: Expression, mdcla: Expression | None, target_coord
     if source == "mdcla" and mdcla is None:
         raise ValueError("This method needs the local mdCLA file.")
     model = fit(visible, target_coordinates, seed)          # also the yardstick for expected share
+    # The method's own model: it chooses the information-gain genes and, for scoring, reconstructs
+    # the target from what was measured.
+    source_model = model if source == "visible" else fit(visible, target_coordinates, seed, mdcla)
     pos = {g: i for i, g in enumerate(target_genes)}
     measured = sorted({pos[g] for g in previous if g in pos})
     eligible = [pos[g] for g in eligible_ids]
 
     if kind == "information":
-        design_model = model if source == "visible" else fit(visible, target_coordinates, seed, mdcla)
+        design_model = source_model
         eligible = [g for g in eligible if visible.found[g]]
 
         def panel(already: list[int], allowed: list[int]) -> list[tuple[int, float, str]]:
@@ -393,7 +446,7 @@ def run(method: str, visible: Expression, mdcla: Expression | None, target_coord
         record = {"round": round_number, "genes": [target_genes[g] for g in added], "n_measured": len(so_far),
                   "expected_share": round(expected, 4) if np.isfinite(expected) else None}
         if score_round is not None:
-            record["benchmark"] = score_round([target_genes[g] for g in so_far])
+            record["benchmark"] = score_round([target_genes[g] for g in so_far], source_model)
         return record
 
     so_far = measured + [g for g, _, _ in picks]

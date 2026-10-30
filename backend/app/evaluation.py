@@ -141,10 +141,15 @@ def evaluate_mouse_embryo_baseline(
     return _format_evaluation(summary, evaluator, len(measured_genes), len(log))
 
 
-def mouse_embryo_round_scorer(spatial_path: Path, reference_path: Path):
-    """Load the E7.5 benchmark once and return a function that scores a list of measured
-    genes the same way as evaluate_mouse_embryo_baseline, for scoring every round of a run."""
+def mouse_embryo_round_scorer(spatial_path: Path, reference_path: Path, reconstruct=None):
+    """Load the E7.5 benchmark once and return a function score(measured_genes, *args) for
+    scoring every round of a run. Without `reconstruct` the embryo is rebuilt as in
+    evaluate_mouse_embryo_baseline (nearest reference cells); otherwise
+    reconstruct(measured_columns, measured_values, *args) returns the dense cells x genes
+    reconstruction in the embryo's gene order."""
     import anndata as ad
+    import pandas as pd
+    import scipy.sparse as sp
 
     project_root = str(Path(__file__).resolve().parents[2])
     if project_root not in sys.path:
@@ -161,9 +166,17 @@ def mouse_embryo_round_scorer(spatial_path: Path, reference_path: Path):
     evaluator = Evaluator(truth)
     available_genes = set(truth.var_names)
 
-    def score(measured_gene_ids: list[str]) -> dict[str, Any]:
+    truth_X = sp.csr_matrix(truth.X)
+
+    def score(measured_gene_ids: list[str], *args: Any) -> dict[str, Any]:
         measured_genes = list(dict.fromkeys(gene for gene in measured_gene_ids if gene in available_genes))
-        reconstruction = _cumulative_reconstruction(truth, visible, measured_genes)
+        if reconstruct is None:
+            reconstruction = _cumulative_reconstruction(truth, visible, measured_genes)
+        else:
+            columns = [int(i) for i in truth.var_names.get_indexer(measured_genes)]
+            dense = reconstruct(columns, truth_X[:, columns].toarray(), *args)
+            reconstruction = ad.AnnData(X=dense, obs=pd.DataFrame(index=truth.obs_names),
+                                        var=pd.DataFrame(index=truth.var_names))
         log = _section_experiment_log(truth, measured_genes, LOG_COLUMNS)
         summary, _ = evaluator.evaluate(reconstruction, log)
         return _format_evaluation(summary, evaluator, len(measured_genes), len(log))

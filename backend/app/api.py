@@ -372,7 +372,13 @@ def _run_design_method(request: SelectionRequest, state: SessionState, spatial: 
     if not visible.found.any():
         raise HTTPException(status_code=422, detail="No spatial gene identifiers match the reference dataset.")
     mdcla = _mdcla(spatial.gene_ids) if design_methods.METHODS[request.method][1] == "mdcla" else None
-    scorer = mouse_embryo_round_scorer(spatial.source_path, reference.source_path) if _benchmark_ready(state, spatial) else None
+    scorer = None
+    if _benchmark_ready(state, spatial):
+        # Each round is reconstructed with the method's own Gaussian posterior, then scored.
+        scorer = mouse_embryo_round_scorer(
+            spatial.source_path, reference.source_path,
+            reconstruct=lambda columns, values, model: design_methods.reconstruct(model, columns, values),
+        )
     try:
         selected, steps, facts = design_methods.run(
             request.method, visible, mdcla, np.asarray(spatial.coordinates, float), spatial.gene_ids,
@@ -383,6 +389,13 @@ def _run_design_method(request: SelectionRequest, state: SessionState, spatial: 
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if scorer is not None:
         evaluation = dict(steps[1]["benchmark"])
+        evaluation["notice"] = (
+            "Computed with the repository's eval_team benchmark. The embryo is reconstructed with this method's "
+            "Gaussian factor model: the posterior of each neighbourhood's factors given the genes measured so far "
+            "(previous rounds plus this one), corrected per cell by its own measured values; measured genes keep "
+            "their observed values, and the experiment log excludes them from held-out scoring. This is a "
+            "retrospective benchmark on the local E7.5 spatial dataset, not a prospective performance guarantee."
+        )
         for step in steps:
             step["benchmark"] = {metric["id"]: metric["value"] for metric in step["benchmark"]["metrics"]}
     else:

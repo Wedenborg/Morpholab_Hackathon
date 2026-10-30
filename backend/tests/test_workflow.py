@@ -617,11 +617,11 @@ def test_expression_previews_use_real_values_and_report_missing_genes(client: Te
 
 
 def _embryo(path: Path, rng: np.random.Generator, n_cells: int, genes: list[str], *, counts: bool = False,
-            obs_extra: dict | None = None, coords: bool = True) -> Path:
+            obs_extra: dict | None = None, coords: bool = True, loadings: np.ndarray | None = None) -> Path:
     """Three sections of cells whose expression follows two spatial gradients."""
     z = np.repeat([0.0, 10.0, 20.0], n_cells // 3)
     x, y = rng.uniform(-100, 100, len(z)), rng.uniform(-100, 100, len(z))
-    loadings = rng.normal(size=(2, len(genes)))
+    loadings = rng.normal(size=(2, len(genes))) if loadings is None else loadings
     rate = np.exp(0.5 + np.c_[x / 100, y / 100] @ loadings * 0.8)
     values = rng.poisson(rate).astype(np.float32)
     X = values if counts else np.log1p(values)
@@ -689,3 +689,27 @@ def test_information_gain_scores_decrease_down_the_ranking(client: TestClient, d
     scores = [gene["score"] for gene in body["selected_genes"]]
     assert all(score >= 0 for score in scores)
     assert scores == sorted(scores, reverse=True)
+
+
+def test_gaussian_reconstruction_keeps_measured_values_and_predicts_the_rest(tmp_path: Path) -> None:
+    from app import design_methods
+
+    rng = np.random.default_rng(3)
+    genes = [f"g{i:02d}" for i in range(30)]
+    patterns = rng.normal(size=(2, len(genes)))
+    target = ad.read_h5ad(_embryo(tmp_path / "target.h5ad", rng, 300, genes, loadings=patterns))
+    visible = ad.read_h5ad(_embryo(tmp_path / "visible.h5ad", rng, 300, genes, loadings=patterns))
+    data = design_methods.load_expression(visible, "X", genes, genes, "cell_type",
+                                          visible.obs[["x", "y", "z"]].to_numpy())
+    coords = target.obs[["x", "y", "z"]].to_numpy()
+    model = design_methods.fit(data, coords, seed=0)
+    measured = [0, 1, 2, 3]
+    values = target.X[:, measured].toarray()
+    recon = design_methods.reconstruct(model, measured, values)
+
+    assert recon.shape == (target.n_obs, len(genes))
+    assert np.allclose(recon[:, measured], values)
+    assert (recon >= 0).all()
+    truth = target.X.toarray()
+    held_out = [np.corrcoef(recon[:, g], truth[:, g])[0, 1] for g in range(4, len(genes))]
+    assert np.nanmean(held_out) > 0.2
