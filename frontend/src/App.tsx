@@ -6,6 +6,7 @@ import type {
   DatasetKind,
   DatasetSummary,
   CandidateSummary,
+  EvaluationStep,
   MappingForm,
   MappingOptions,
   PreviewResponse,
@@ -16,6 +17,25 @@ import type {
 } from "./types";
 
 type DatasetMap<T> = Record<DatasetKind, T>;
+
+const DESIGN_METHODS: Partial<Record<SelectionMethod, { label: string; note: string }>> = {
+  gaussian_visible: {
+    label: "Gaussian information gain · visible embryo",
+    note: "Factor model fitted on the reference (visible) embryo's neighbourhoods; genes chosen greedily by expected information gain about the target's factors, given the genes already measured.",
+  },
+  gaussian_mdcla: {
+    label: "Gaussian information gain · mdCLA",
+    note: "As above, with factor directions and gene weights from mdCLA E7.5 single cells, rescaled per gene to the visible embryo.",
+  },
+  rotating_visible: {
+    label: "Rotating markers · visible embryo",
+    note: "Each cell type's next-best marker in turn, from the reference (visible) embryo's cell types.",
+  },
+  rotating_mdcla: {
+    label: "Rotating markers · mdCLA",
+    note: "Each cell subtype's next-best marker in turn, from mdCLA E7.5 single cells.",
+  },
+};
 
 const initialMapping = (kind: DatasetKind): MappingForm => ({
   gene_field: "var_names",
@@ -43,6 +63,10 @@ function selectionMethodFromValue(value: string): SelectionMethod {
     case "dummy_variance":
     case "dummy_random":
     case "manual":
+    case "gaussian_visible":
+    case "gaussian_mdcla":
+    case "rotating_visible":
+    case "rotating_mdcla":
       return value;
     default:
       return "random";
@@ -207,12 +231,16 @@ function UploadCard({
 
 function ResultsTable({
   genes,
+  scoreLabel,
+  synthetic,
   search,
   setSearch,
   selected,
   onSelect,
 }: {
   genes: SelectedGene[];
+  scoreLabel: string;
+  synthetic: boolean;
   search: string;
   setSearch: (value: string) => void;
   selected: SelectedGene | null;
@@ -229,7 +257,7 @@ function ResultsTable({
       </div>
       <div className="table-scroll">
         <table>
-          <thead><tr><th>Rank</th><th>Gene</th><th>Stable identifier</th><th>Demo score</th></tr></thead>
+          <thead><tr><th>Rank</th><th>Gene</th><th>Stable identifier</th><th>{scoreLabel}</th></tr></thead>
           <tbody>
             {filtered.map((gene) => (
               <tr
@@ -252,7 +280,7 @@ function ResultsTable({
           </tbody>
         </table>
       </div>
-      <p className="table-footnote">Scores are synthetic demo scores, not estimated information gain, probabilities, or evidence of biological usefulness.</p>
+      {synthetic && <p className="table-footnote">Scores are synthetic demo scores, not estimated information gain, probabilities, or evidence of biological usefulness.</p>}
     </div>
   );
 }
@@ -286,6 +314,88 @@ function ExpressionPreview({ label, preview }: { label: string; preview: Preview
   );
 }
 
+const EXPECTED_SHARE_TIP = "The Gaussian model's own expectation of how much of the unmeasured genes' neighbourhood-level variance it predicts, given the genes sequenced so far. Fitted on the visible embryo; it is not compared with this embryo.";
+
+type MetricInfo = { id: string; label: string; explanation?: string };
+
+function StepsPanel({ steps, metrics }: { steps: EvaluationStep[]; metrics: MetricInfo[] }) {
+  const width = 520;
+  const height = 170;
+  const left = 36;
+  const right = 500;
+  const x = (index: number) => left + (steps.length > 1 ? (index / (steps.length - 1)) * (right - left) : (right - left) / 2);
+  const shown = metrics.filter((metric) => steps.some((step) => step.benchmark?.[metric.id] !== undefined));
+  const series = [
+    ...(shown.some((metric) => metric.id === "heldout_corr")
+      ? [{ label: "Accuracy on unmeasured genes (eval_team)", value: (step: EvaluationStep) => step.benchmark?.heldout_corr ?? null, alt: false }]
+      : []),
+    { label: "Expected share predicted (model)", value: (step: EvaluationStep) => step.expected_share, alt: true },
+  ];
+  const values = steps.flatMap((step) => series.map((item) => item.value(step))).filter((value): value is number => value !== null);
+  const max = Math.max(0.05, ...values);
+  const y = (value: number) => height - 24 - (value / max) * (height - 44);
+  const labelEvery = Math.ceil(steps.length / 10);
+  return (
+    <div className="steps-panel">
+      <h4>Scores per round</h4>
+      <div className="evaluation-chart">
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Scores per round">
+          {[0, 0.25, 0.5, 0.75, 1].map((fraction) => (
+            <g key={fraction}>
+              <line x1="30" x2="505" y1={y(fraction * max)} y2={y(fraction * max)} className="chart-grid" />
+              <text x="26" y={y(fraction * max) + 3} textAnchor="end">{(fraction * max).toFixed(2)}</text>
+            </g>
+          ))}
+          {series.map((item) => {
+            const pts = steps
+              .map((step, index) => ({ index, value: item.value(step) }))
+              .filter((point): point is { index: number; value: number } => point.value !== null);
+            const d = pts.map((point, i) => `${i ? "L" : "M"} ${x(point.index)} ${y(point.value)}`).join(" ");
+            return (
+              <g key={item.label}>
+                <path d={d} className={item.alt ? "chart-path chart-path-alt" : "chart-path"} />
+                {pts.map((point) => (
+                  <circle key={point.index} cx={x(point.index)} cy={y(point.value)} r="3.5" className={item.alt ? "chart-point chart-point-alt" : "chart-point"} />
+                ))}
+              </g>
+            );
+          })}
+          {steps.map((step, index) => index % labelEvery === 0 && (
+            <text key={step.round} x={x(index)} y={height - 6} textAnchor="middle">{step.n_measured} genes</text>
+          ))}
+        </svg>
+        <div className="chart-legend">
+          {series.map((item) => <span key={item.label} className={item.alt ? "legend-alt" : "legend-main"}><i />{item.label}</span>)}
+        </div>
+      </div>
+      <div className="table-scroll">
+        <table className="steps-table">
+          <thead>
+            <tr>
+              <th>Round</th>
+              <th>Genes sequenced</th>
+              {shown.map((metric) => <th key={metric.id} className="has-tip" data-tip={metric.explanation} tabIndex={0}>{metric.label}</th>)}
+              <th className="has-tip" data-tip={EXPECTED_SHARE_TIP} tabIndex={0}>Expected share (model)</th>
+              <th>Genes added</th>
+            </tr>
+          </thead>
+          <tbody>
+            {steps.map((step) => (
+              <tr key={step.round}>
+                <td>{step.round === 0 ? "0 (previous)" : step.round}</td>
+                <td>{step.n_measured}</td>
+                {shown.map((metric) => <td key={metric.id}>{step.benchmark?.[metric.id]?.toFixed(3) ?? "—"}</td>)}
+                <td>{step.expected_share === null ? "—" : step.expected_share.toFixed(3)}</td>
+                <td className="steps-genes">{step.genes.join(", ") || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function EvaluationPanel({ result }: { result: SelectionResponse }) {
   return (
     <section className="evaluation-panel">
@@ -298,8 +408,8 @@ function EvaluationPanel({ result }: { result: SelectionResponse }) {
         <>
           <div className="evaluation-metrics">
             {result.evaluation.metrics.map((metric) => (
-              <article className="evaluation-metric" key={metric.id}>
-                <span>{metric.label}</span>
+              <article className="evaluation-metric has-tip" key={metric.id} data-tip={metric.explanation} tabIndex={0}>
+                <span>{metric.label}{metric.explanation && <i className="tip-mark" aria-hidden="true">i</i>}</span>
                 <strong>{metric.value.toFixed(3)}</strong>
                 <small>{metric.description}</small>
                 {metric.true_data !== null && (
@@ -329,6 +439,7 @@ function EvaluationPanel({ result }: { result: SelectionResponse }) {
       ) : (
         <p className="evaluation-unavailable">This run has no benchmark scores.</p>
       )}
+      {result.evaluation.steps?.length ? <StepsPanel steps={result.evaluation.steps} metrics={result.evaluation.metrics} /> : null}
     </section>
   );
 }
@@ -350,6 +461,7 @@ export default function App() {
   const [manualMode, setManualMode] = useState(false);
   const [chosenGenesText, setChosenGenesText] = useState("");
   const [seedText, setSeedText] = useState("");
+  const [roundsText, setRoundsText] = useState("5");
   const [result, setResult] = useState<SelectionResponse | null>(null);
   const [addedToPrevious, setAddedToPrevious] = useState(0);
   const [selectedGene, setSelectedGene] = useState<SelectedGene | null>(null);
@@ -388,16 +500,19 @@ export default function App() {
   const eligibleCount = candidateSummary?.eligible_count ?? 0;
   const allReady = Boolean(datasets.spatial?.valid && datasets.reference?.valid);
   const isEvalTeamMethod = selectionMethod.startsWith("dummy_");
+  const designMethod = DESIGN_METHODS[selectionMethod];
   const evalTeamMethodReady = e75Preset
     && mappings.spatial.gene_field === "var_names"
     && mappings.spatial.matrix_layer === "X"
     && !mappings.spatial.transpose;
   const parsedNg = Number(panelSize);
+  const parsedRounds = Number(roundsText);
+  const roundsValid = Number.isInteger(parsedRounds) && parsedRounds >= 1 && parsedRounds <= 50;
   const ngValid = Number.isInteger(parsedNg) && parsedNg > 0 && parsedNg <= eligibleCount
     && (!isEvalTeamMethod || (evalTeamMethodReady && parsedNg % 4 === 0));
   const parsedSeed = Number(seedText);
   const seedValid = !seedText.trim() || Number.isSafeInteger(parsedSeed);
-  const validForSelection = allReady && ngValid && seedValid && Boolean(sessionId)
+  const validForSelection = allReady && ngValid && seedValid && (!designMethod || roundsValid) && Boolean(sessionId)
     && !mappingDirty.spatial && !mappingDirty.reference && !busy.spatial && !busy.reference
     && !exampleBusy && !mouseBusy && (!isEvalTeamMethod || evalTeamMethodReady);
 
@@ -572,6 +687,7 @@ export default function App() {
         chosen_genes: chosenGenes,
         ng,
         seed: seedText.trim() ? parsedSeed : null,
+        rounds: parsedRounds,
       });
       setResult(response);
       setSelectedGene(response.selected_genes[0] ?? null);
@@ -653,7 +769,7 @@ export default function App() {
       return;
     }
     const rows = [
-      ["gene_id", "display_name", "rank", "demo_score", "score_provenance"],
+      ["gene_id", "display_name", "rank", "score", "score_provenance"],
       ...result.selected_genes.map((gene) => [gene.gene_id, gene.display_name, gene.rank, gene.score, gene.score_provenance]),
     ];
     download("selected-genes.csv", `${rows.map((row) => row.map(csvEscape).join(",")).join("\n")}\n`, "text/csv");
@@ -664,6 +780,7 @@ export default function App() {
     download("gene-panel-run-summary.json", `${JSON.stringify(result.run_summary, null, 2)}\n`, "application/json");
   }
 
+  const maxScore = Math.max(1e-12, ...(result?.selected_genes.map((gene) => gene.score ?? 0) ?? [1]));
   const filteredChartGenes = result?.selected_genes.filter((gene) => gene.score !== null).slice(0, 8) ?? [];
   return (
     <div className="app-shell">
@@ -810,17 +927,20 @@ export default function App() {
                 }}
               >
                 <option value="random">Web random panel</option>
+                {Object.entries(DESIGN_METHODS).map(([id, info]) => <option key={id} value={id}>{info?.label}</option>)}
                 <option value="dummy_markers" disabled={!evalTeamMethodReady}>eval_team dummy · cell-type markers</option>
                 <option value="dummy_variance" disabled={!evalTeamMethodReady}>eval_team dummy · variable genes</option>
                 <option value="dummy_random" disabled={!evalTeamMethodReady}>eval_team dummy · random expressed genes</option>
               </select>
               <p className="helper-text">
-                {isEvalTeamMethod
+                {designMethod
+                  ? designMethod.note
+                  : isEvalTeamMethod
                   ? "Uses the repository dummy reconstruction method. These methods measure genes in groups of four."
                   : "The web random selector samples spatial genes without replacement. Select the local E7.5 preset to enable eval_team dummy methods."}
               </p>
               <div className="field-heading">
-                <label htmlFor="ng-input">{isEvalTeamMethod ? "Genes to measure (sets of four)" : "Additional genes to select"}</label>
+                <label htmlFor="ng-input">{isEvalTeamMethod ? "Genes to measure (sets of four)" : designMethod ? "Genes sequenced per round" : "Additional genes to select"}</label>
                 <span className="required">Required</span>
               </div>
               <input
@@ -840,6 +960,26 @@ export default function App() {
                     : `Enter a whole number from 1 to ${eligibleCount} eligible genes.`}
                 </p>
               )}
+              {designMethod && (
+                <>
+                  <div className="field-heading">
+                    <label htmlFor="rounds-input">Rounds (experiment budget)</label>
+                    <span className="optional">{roundsValid && ngValid ? `${parsedRounds} × ${parsedNg} = ${parsedRounds * parsedNg} genes sequenced` : "1–50"}</span>
+                  </div>
+                  <input
+                    id="rounds-input"
+                    type="number"
+                    min="1"
+                    max="50"
+                    step="1"
+                    value={roundsText}
+                    onChange={(event) => { setRoundsText(event.target.value); clearResults(); }}
+                    aria-invalid={!roundsValid}
+                  />
+                  {!roundsValid && <p className="input-error" role="alert">Enter a whole number of rounds from 1 to 50.</p>}
+                  <p className="helper-text">Round 1 is the panel returned; later rounds are simulated with the same method and scored, so the chart shows how the scores grow with the number of genes sequenced.</p>
+                </>
+              )}
               <div className="pool-summary">
                 <div><span>Candidate genes</span><strong>{candidateSummary?.candidate_count.toLocaleString() ?? "—"}</strong></div>
                 <div><span>Previous IDs supplied</span><strong>{candidateSummary?.previous_count.toLocaleString() ?? "—"}</strong></div>
@@ -854,8 +994,10 @@ export default function App() {
               <div className="method-note">
                 <span className="method-mark">↗</span>
                 <span>
-                  <strong>{isEvalTeamMethod ? "eval_team dummy method" : "Web random method"}</strong>
-                  {isEvalTeamMethod
+                  <strong>{designMethod ? designMethod.label : isEvalTeamMethod ? "eval_team dummy method" : "Web random method"}</strong>
+                  {designMethod
+                    ? " · the spatial dataset contributes positions only; scores per round use eval_team on the E7.5 preset."
+                    : isEvalTeamMethod
                     ? " · reconstructs from the reference embryo with nearest-neighbour matching."
                     : " · reproducible random sampling; the reference does not filter candidates."}
                 </span>
@@ -925,33 +1067,33 @@ export default function App() {
               )}
               <div className="results-grid">
                 <section className="result-panel chart-panel">
-                  <div className="panel-title"><div><div className="eyebrow">ORDERED BY DEMO SCORE</div><h3>Selection scores</h3></div><span className="demo-score-tag">DEMO SCORE</span></div>
+                  <div className="panel-title"><div><div className="eyebrow">IN SELECTION ORDER</div><h3>Selection scores</h3></div><span className="demo-score-tag">{result.score_label.toUpperCase()}</span></div>
                   <div className="bar-chart">
                     {filteredChartGenes.map((gene) => (
                       <button key={gene.gene_id} className={`bar-row ${selectedGene?.gene_id === gene.gene_id ? "bar-selected" : ""}`} onClick={() => setSelectedGene(gene)}>
                         <span className="bar-label">{gene.display_name}</span>
-                        <span className="bar-track"><i style={{ width: `${(gene.score ?? 0) * 100}%` }} /></span>
+                        <span className="bar-track"><i style={{ width: `${((gene.score ?? 0) / maxScore) * 100}%` }} /></span>
                         <span className="bar-number">{gene.score?.toFixed(3)}</span>
                       </button>
                     ))}
                     {!filteredChartGenes.length && <p className="helper-text">This method does not assign per-gene scores.</p>}
                   </div>
-                  {filteredChartGenes.length > 0 && <p className="helper-text">Synthetic deterministic ranking scores; not biological utility or information gain.</p>}
+                  {filteredChartGenes.length > 0 && <p className="helper-text">{result.method === "random-demo-v1" ? "Synthetic deterministic ranking scores; not biological utility or information gain." : result.selected_genes[0]?.score_provenance}</p>}
                 </section>
                 <section className="result-panel detail-panel">
                   <div className="panel-title"><div><div className="eyebrow">GENE DETAIL</div><h3>{selectedGene?.display_name ?? "Select a gene"}</h3></div></div>
                   {selectedGene ? (
                     <>
                       <div className="gene-meta"><span>Stable ID</span><code>{selectedGene.gene_id}</code><span>Rank</span><strong>#{selectedGene.rank}</strong></div>
-                      <p className="detail-score"><span>Method score</span><strong>{selectedGene.score?.toFixed(4) ?? "Not assigned"}</strong></p>
+                      <p className="detail-score"><span>{result.score_label}</span><strong>{selectedGene.score?.toFixed(4) ?? "Not assigned"}</strong></p>
                       <ExpressionPreview label="Spatial dataset" preview={spatialGenePreview} />
                       <ExpressionPreview label="Reference dataset" preview={referencePreview} />
-                      <p className="detail-notice">Expression values are sampled from the datasets where available. Any displayed random-panel ranking score is synthetic.</p>
+                      <p className="detail-notice">{result.method === "random-demo-v1" ? "Expression values are sampled from the datasets where available. Any displayed random-panel ranking score is synthetic." : selectedGene.score_provenance}</p>
                     </>
                   ) : <p className="helper-text">Choose a gene above to inspect its identifier and data availability.</p>}
                 </section>
               </div>
-              <ResultsTable genes={result.selected_genes} search={search} setSearch={setSearch} selected={selectedGene} onSelect={setSelectedGene} />
+              <ResultsTable genes={result.selected_genes} scoreLabel={result.score_label} synthetic={result.method === "random-demo-v1"} search={search} setSearch={setSearch} selected={selectedGene} onSelect={setSelectedGene} />
               {result.unmatched_previous_genes.length > 0 && (
                 <div className="unmatched-note"><strong>{result.unmatched_previous_genes.length} previous identifier(s) were not found in spatial genes.</strong><span>{result.unmatched_previous_genes.join(", ")}</span></div>
               )}
@@ -966,7 +1108,7 @@ export default function App() {
         </section>
         <section className="about-demo" id="about">
           <span className="about-mark">i</span>
-          <div><strong>About this prototype</strong><p>“Next round” means the next measurement round, not a prediction of biological change over time. The candidate universe is the spatial dataset’s selected gene identifiers; reference-only genes are not added. Gene-row scores are synthetic ranking placeholders. For the local E7.5 preset, reconstruction metrics come from the repository’s eval_team benchmark; other datasets are not given fabricated evaluation scores.</p></div>
+          <div><strong>About this prototype</strong><p>“Next round” means the next measurement round, not a prediction of biological change over time. The candidate universe is the spatial dataset’s selected gene identifiers; reference-only genes are not added. Gene-row scores are synthetic for the web random panel; the Gaussian methods report information gain and the rotating methods marker strength. For the local E7.5 preset, reconstruction metrics come from the repository’s eval_team benchmark; other datasets are not given fabricated evaluation scores.</p></div>
         </section>
       </main>
       <footer><span>FIELDNOTE · GENE PANEL PLANNER</span><span>Prototype for research workflows</span></footer>

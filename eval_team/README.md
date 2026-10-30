@@ -216,6 +216,7 @@ With rep1 hidden, the pattern is the same. The script prints both.
 - **The proportion score measures information, not gene identity.** The classifier is trained on the reconstruction itself, so shuffled gene names still get proportions roughly right. It is also noisy: the true data's distance is 0.06 for rep2 but 0.19 for rep1. Use it as a secondary score.
 - **Shuffled genes score up to 0.13 against Peng.** Many patterned genes share the same broad layer pattern. Treat about 0.1 as the floor for that score.
 - **The atlas comparison isn't fully independent.** The Stereo-seq cell-type labels look like they were transferred from this atlas.
+- **Methods must not train on the Pijuan-Sala atlas.** This also rules out datasets that contain it: TOME and the Extended Mouse Atlas. A reconstruction built from the atlas matches `atlas_spearman` by construction, so its atlas score means nothing. Use an independent single-cell reference instead, such as mdCLA E7.5. For the same reason, methods must not use the Peng Geo-seq data, which is behind `peng_spearman`.
 - **Rotating more gene sets doesn't help the dummy.** Each cell is matched on its own section's 4 genes only. A real method has to combine measurements across sections to benefit from measuring more distinct genes.
 - **Only E7.5 is covered.** Peng's data stops at E7.5. The atlas tables for E7.75 and E8.0 are already built.
 

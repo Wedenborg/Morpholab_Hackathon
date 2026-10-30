@@ -326,3 +326,28 @@ footer { display: flex; justify-content: space-between; max-width: 1120px; margi
   th, td { padding-left: 8px; padding-right: 8px; }
   footer { padding: 0 14px 18px; gap: 12px; flex-wrap: wrap; }
 }
+
+.panel-settings > .field-heading { margin-top: 14px; }
+.evaluation-chart { position: relative; max-width: 620px; margin: 4px auto 0; padding-bottom: 10px; }
+.evaluation-chart svg { width: 100%; overflow: visible; }
+.evaluation-chart text { fill: #968d7c; font: 8px "DM Sans", sans-serif; }
+.chart-grid { stroke: #eae8df; stroke-width: 1; }
+.chart-path { fill: none; stroke: #bb8d52; stroke-width: 2; }
+.chart-point { fill: #fff; stroke: #bb8d52; stroke-width: 2; }
+.chart-path-alt { stroke: #5f8a7d; stroke-dasharray: 4 3; }
+.chart-point-alt { stroke: #5f8a7d; }
+.chart-legend { display: flex; justify-content: center; gap: 16px; margin-top: 4px; color: #928876; font-size: 8px; }
+.chart-legend i { display: inline-block; width: 14px; height: 0; margin-right: 5px; vertical-align: middle; border-top: 2px solid #bb8d52; }
+.chart-legend .legend-alt i { border-top: 2px dashed #5f8a7d; }
+.steps-table td, .steps-table th { font-size: 9px; }
+.steps-genes { white-space: normal; min-width: 220px; color: #5d6f69; }
+.steps-panel { margin-top: 16px; padding-top: 12px; border-top: 1px solid #e6e3d8; }
+.steps-panel h4 { margin: 0 0 6px; color: #766b57; font-size: 11px; }
+.has-tip { position: relative; }
+.has-tip[data-tip]:hover::after, .has-tip[data-tip]:focus::after {
+  content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 20; width: 260px;
+  padding: 8px 10px; border-radius: 6px; background: #2f4a44; color: #f4f1e8; box-shadow: 0 6px 18px rgba(0,0,0,.18);
+  font: 400 10px/1.45 "DM Sans", sans-serif; letter-spacing: 0; text-transform: none; white-space: normal;
+}
+.tip-mark { display: inline-grid; place-items: center; width: 11px; height: 11px; margin-left: 5px; border: 1px solid #b9c6c0; border-radius: 50%; color: #6f847d; font: 600 7px/1 "DM Sans", sans-serif; font-style: normal; vertical-align: 1px; }
+.steps-table th.has-tip { cursor: help; text-decoration: underline dotted #b9c6c0; }

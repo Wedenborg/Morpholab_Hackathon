@@ -8,5 +8,7 @@ __pycache__/
 *.tsbuildinfo
 
 /data/
+active_design/*.csv
+active_design/results/*
 dataset/data/
 preprocessing/results/

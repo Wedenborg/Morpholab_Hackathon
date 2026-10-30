@@ -614,3 +614,78 @@ def test_expression_previews_use_real_values_and_report_missing_genes(client: Te
     assert len(reference["color_values"]) == 80
     assert unavailable["available"] is False
     assert "not present" in unavailable["message"]
+
+
+def _embryo(path: Path, rng: np.random.Generator, n_cells: int, genes: list[str], *, counts: bool = False,
+            obs_extra: dict | None = None, coords: bool = True) -> Path:
+    """Three sections of cells whose expression follows two spatial gradients."""
+    z = np.repeat([0.0, 10.0, 20.0], n_cells // 3)
+    x, y = rng.uniform(-100, 100, len(z)), rng.uniform(-100, 100, len(z))
+    loadings = rng.normal(size=(2, len(genes)))
+    rate = np.exp(0.5 + np.c_[x / 100, y / 100] @ loadings * 0.8)
+    values = rng.poisson(rate).astype(np.float32)
+    X = values if counts else np.log1p(values)
+    obs = {"cell_type": np.where(x > 0, "anterior", "posterior")}
+    if coords:
+        obs.update({"x": x, "y": y, "z": z})
+    obs.update(obs_extra or {})
+    adata = ad.AnnData(X=sparse.csr_matrix(X), obs=pd.DataFrame(obs, index=[f"{path.stem}_{i}" for i in range(len(z))]),
+                       var=pd.DataFrame(index=genes))
+    adata.obsm["spatial"] = np.c_[x, y, z]
+    adata.write_h5ad(path)
+    return path
+
+
+@pytest.fixture()
+def design_session(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    rng = np.random.default_rng(0)
+    genes = [f"g{i:02d}" for i in range(30)]
+    target = _embryo(tmp_path / "target.h5ad", rng, 300, genes)
+    visible = _embryo(tmp_path / "visible.h5ad", rng, 300, genes)
+    mdcla = _embryo(tmp_path / "mdcla.h5ad", rng, 240, genes[:25], counts=True, coords=False,
+                    obs_extra={"level4_subtypes": np.repeat(["a", "b", "c"], 80)})
+    monkeypatch.setattr(api, "MDCLA_PATH", mdcla)
+    session_id = client.post("/api/sessions").json()["session_id"]
+    for kind, path in (("spatial", target), ("reference", visible)):
+        with path.open("rb") as handle:
+            response = client.post(
+                f"/api/datasets/{kind}",
+                data={"session_id": session_id, "cell_type_field": "cell_type"},
+                files={"file": (path.name, handle, "application/octet-stream")},
+            )
+        assert response.status_code == 200, response.text
+    return session_id
+
+
+@pytest.mark.parametrize("method", ["gaussian_visible", "gaussian_mdcla", "rotating_visible", "rotating_mdcla"])
+def test_design_methods_select_new_genes_and_score_every_round(client: TestClient, design_session: str, method: str) -> None:
+    previous = ["g00", "g01", "g02"]
+    request = {"session_id": design_session, "previous_genes": previous, "ng": 3, "seed": 1, "method": method, "rounds": 3}
+    first = client.post("/api/select", json=request)
+    second = client.post("/api/select", json=request)
+
+    assert first.status_code == 200, first.text
+    body = first.json()
+    genes = [gene["gene_id"] for gene in body["selected_genes"]]
+    assert len(genes) == len(set(genes)) == 3
+    assert not set(genes) & set(previous)
+    assert genes == [gene["gene_id"] for gene in second.json()["selected_genes"]]
+    assert body["method"] == method
+    steps = body["evaluation"]["steps"]
+    assert [step["round"] for step in steps] == [0, 1, 2, 3]
+    assert steps[1]["genes"] == genes
+    assert [step["n_measured"] for step in steps] == [3, 6, 9, 12]
+    expected = [step["expected_share"] for step in steps]
+    assert expected == sorted(expected)
+    if method.endswith("mdcla"):
+        assert all(int(gene[1:]) < 25 for step in steps for gene in step["genes"])
+
+
+def test_information_gain_scores_decrease_down_the_ranking(client: TestClient, design_session: str) -> None:
+    body = client.post(
+        "/api/select",
+        json={"session_id": design_session, "ng": 6, "seed": 0, "method": "gaussian_visible"},
+    ).json()
+    scores = [gene["score"] for gene in body["selected_genes"]]
+    assert all(score >= 0 for score in scores)
+    assert scores == sorted(scores, reverse=True)

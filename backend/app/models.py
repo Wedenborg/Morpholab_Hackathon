@@ -64,10 +64,14 @@ class MappingRequest(BaseModel):
 class SelectionRequest(BaseModel):
     session_id: str
     previous_genes: list[str] = Field(default_factory=list)
-    method: Literal["random", "dummy_markers", "dummy_variance", "dummy_random", "manual"] = "random"
+    method: Literal[
+        "random", "dummy_markers", "dummy_variance", "dummy_random", "manual",
+        "gaussian_visible", "gaussian_mdcla", "rotating_visible", "rotating_mdcla",
+    ] = "random"
     chosen_genes: list[str] = Field(default_factory=list)
     ng: int = Field(strict=True, gt=0)
     seed: int | None = None
+    rounds: int = Field(default=5, strict=True, ge=1, le=50)
 
 
 class CandidateRequest(BaseModel):
@@ -95,6 +99,7 @@ class SelectedGene(BaseModel):
 class SelectionResponse(BaseModel):
     method: str
     method_label: str
+    score_label: str = "Score"
     seed: int
     selected_genes: list[SelectedGene]
     candidate_count: int

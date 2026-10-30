@@ -1,5 +1,14 @@
 export type DatasetKind = "spatial" | "reference";
-export type SelectionMethod = "random" | "dummy_markers" | "dummy_variance" | "dummy_random" | "manual";
+export type SelectionMethod =
+  | "random"
+  | "dummy_markers"
+  | "dummy_variance"
+  | "dummy_random"
+  | "manual"
+  | "gaussian_visible"
+  | "gaussian_mdcla"
+  | "rotating_visible"
+  | "rotating_mdcla";
 
 export interface ValidationIssue {
   severity: "error" | "warning";
@@ -76,9 +85,18 @@ export interface SelectedGene {
   score_provenance: string;
 }
 
+export interface EvaluationStep {
+  round: number;
+  genes: string[];
+  n_measured: number;
+  expected_share: number | null;
+  benchmark?: Record<string, number>;
+}
+
 export interface SelectionResponse {
   method: string;
   method_label: string;
+  score_label: string;
   seed: number;
   selected_genes: SelectedGene[];
   candidate_count: number;
@@ -97,6 +115,7 @@ export interface SelectionResponse {
       id: string;
       label: string;
       description: string;
+      explanation?: string;
       value: number;
       true_data: number | null;
     }[];
@@ -104,6 +123,7 @@ export interface SelectionResponse {
     measured_gene_count?: number;
     experiment_count?: number;
     external_references?: string[];
+    steps?: EvaluationStep[];
   };
   run_summary: Record<string, unknown>;
 }

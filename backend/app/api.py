@@ -7,19 +7,20 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import anndata as ad
 import numpy as np
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import data_io
+from . import data_io, design_methods
 from .candidates import prepare_candidates
 from .data_io import MAX_UPLOAD_BYTES, MAX_UPLOAD_MB
 from .evaluation import (
     evaluation_unavailable,
     evaluate_mouse_embryo_baseline,
+    mouse_embryo_round_scorer,
     run_eval_team_dummy_method,
 )
 from .models import (
@@ -43,6 +44,8 @@ MOUSE_EMBRYO_DATA_DIR = Path(
     os.getenv("MORPHO_DATA_DIR", PROJECT_ROOT / "data" / "GSE278603_RAW")
 )
 MOUSE_EMBRYO_PREVIOUS_GENES = ["Fth1", "Rpl8", "Eif5a", "Cox7c"]
+MDCLA_PATH = Path(os.getenv("MDCLA_PATH", PROJECT_ROOT.parent / "reference_data" / "mdcla" / "mdCLA_E7.5.h5ad"))
+_mdcla_cache: dict[tuple[str, int, int], design_methods.Expression] = {}
 DUMMY_METHODS = {
     "dummy_markers": ("markers", "Dummy markers · nearest-neighbour reconstruction"),
     "dummy_variance": ("variance", "Dummy variable genes · nearest-neighbour reconstruction"),
@@ -320,6 +323,78 @@ def get_session(session_id: str) -> dict[str, object]:
     return {"session_id": state.session_id, "datasets": {key: value.summary for key, value in state.datasets.items()}}
 
 
+def _benchmark_ready(state: SessionState, spatial: DatasetFile) -> bool:
+    return (
+        state.e75_benchmark
+        and spatial.mapping.gene_field == "var_names"
+        and spatial.mapping.matrix_layer == "X"
+        and not spatial.transposed
+    )
+
+
+def _visible_coordinates(adata: ad.AnnData, dataset: DatasetFile) -> np.ndarray:
+    """Positions of the reference (visible embryo) cells: obs x, y (and z) when present,
+    otherwise the reference's mapped coordinates."""
+    columns = [c for c in ("x", "y", "z") if c in adata.obs]
+    if {"x", "y"} <= set(columns):
+        return adata.obs[columns].to_numpy(float)
+    if dataset.coordinates is not None:
+        return np.asarray(dataset.coordinates, float)
+    if dataset.mapping.coordinate_field in adata.obsm:
+        return np.asarray(adata.obsm[dataset.mapping.coordinate_field], float)[:, :3]
+    raise HTTPException(
+        status_code=422,
+        detail="The Gaussian and rotating methods fit on the reference as a visible embryo, so the reference "
+        "needs spatial coordinates (obs x/y[/z] or a mapped coordinate field).",
+    )
+
+
+def _mdcla(target_genes: list[str]) -> design_methods.Expression:
+    if not MDCLA_PATH.is_file():
+        raise HTTPException(status_code=503, detail=f"The mdCLA file is unavailable; set MDCLA_PATH. Missing: {MDCLA_PATH}")
+    key = (str(MDCLA_PATH), len(target_genes), hash(tuple(target_genes)))
+    if key not in _mdcla_cache:
+        _mdcla_cache.clear()
+        _mdcla_cache[key] = design_methods.load_mdcla(MDCLA_PATH, target_genes)
+    return _mdcla_cache[key]
+
+
+def _run_design_method(request: SelectionRequest, state: SessionState, spatial: DatasetFile,
+                       reference: DatasetFile, pool: Any, seed: int) -> tuple[list[SelectedGene], dict[str, Any]]:
+    if spatial.coordinates is None:
+        raise HTTPException(status_code=422, detail="This method needs the spatial dataset's coordinates.")
+    adata = ad.read_h5ad(reference.path)
+    visible = design_methods.load_expression(
+        adata, reference.mapping.matrix_layer, reference.gene_ids, spatial.gene_ids,
+        reference.mapping.cell_type_field, _visible_coordinates(adata, reference),
+    )
+    del adata
+    if not visible.found.any():
+        raise HTTPException(status_code=422, detail="No spatial gene identifiers match the reference dataset.")
+    mdcla = _mdcla(spatial.gene_ids) if design_methods.METHODS[request.method][1] == "mdcla" else None
+    scorer = mouse_embryo_round_scorer(spatial.source_path, reference.source_path) if _benchmark_ready(state, spatial) else None
+    try:
+        selected, steps, facts = design_methods.run(
+            request.method, visible, mdcla, np.asarray(spatial.coordinates, float), spatial.gene_ids,
+            request.previous_genes, list(pool.identifiers), request.ng, request.rounds, seed,
+            pool.display_names, scorer,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if scorer is not None:
+        evaluation = dict(steps[1]["benchmark"])
+        for step in steps:
+            step["benchmark"] = {metric["id"]: metric["value"] for metric in step["benchmark"]["metrics"]}
+    else:
+        evaluation = evaluation_unavailable(
+            "The eval_team benchmark is available for the unmodified local E7.5 mouse-embryo preset only. "
+            "The per-round table shows the model's expected share of variance predicted."
+        )
+    evaluation["steps"] = steps
+    evaluation["model"] = facts
+    return selected, evaluation
+
+
 @router.post("/select", response_model=SelectionResponse)
 def run_selection(request: SelectionRequest) -> SelectionResponse:
     state = _session(request.session_id)
@@ -396,6 +471,14 @@ def run_selection(request: SelectionRequest) -> SelectionResponse:
             )
             for index, gene in enumerate(chosen_genes, start=1)
         ]
+    elif request.method in design_methods.METHODS:
+        if request.ng > len(pool.identifiers):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Requested {request.ng} genes, but only {len(pool.identifiers)} eligible genes remain.",
+            )
+        method_label = design_methods.METHODS[request.method][2]
+        selected, evaluation = _run_design_method(request, state, spatial, reference, pool, seed)
     else:
         method_label = METHOD_LABEL
 
@@ -440,6 +523,8 @@ def run_selection(request: SelectionRequest) -> SelectionResponse:
         )
     elif request.method in DUMMY_METHODS:
         method_id = f"eval-team-{request.method}"
+    elif request.method in design_methods.METHODS:
+        method_id = request.method
     else:
         method_id = METHOD_ID
         if (
@@ -495,6 +580,10 @@ def run_selection(request: SelectionRequest) -> SelectionResponse:
     return SelectionResponse(
         method=method_id,
         method_label=method_label,
+        score_label=(
+            design_methods.SCORE_LABELS[design_methods.METHODS[request.method][0]]
+            if request.method in design_methods.METHODS else "Score"
+        ),
         seed=seed,
         selected_genes=selected,
         candidate_count=len(spatial.gene_ids),

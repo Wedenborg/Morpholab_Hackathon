@@ -73,6 +73,7 @@ export const api = {
     chosen_genes: string[];
     ng: number;
     seed: number | null;
+    rounds: number;
   }) =>
     request<SelectionResponse>("/api/select", {
       method: "POST",

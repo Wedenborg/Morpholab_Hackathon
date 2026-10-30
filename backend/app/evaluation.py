@@ -8,28 +8,40 @@ from typing import Any
 
 _METRIC_INFO = {
     "peng_spearman": (
-        "Peng region-pattern Spearman",
+        "Match to published regions (Peng)",
         "Higher is better.",
+        "For each gene, the Spearman correlation between the reconstruction's averages over 8 anatomical "
+        "regions and Peng et al. 2019 Geo-seq measurements of the same regions in another E7.5 embryo, "
+        "averaged over about 250 genes.",
     ),
     "atlas_spearman": (
-        "Atlas cell-type-pattern Spearman",
+        "Match to published cell types (atlas)",
         "Higher is better.",
+        "The same comparison against cell-type averages from the Pijuan-Sala 2019 E7.5 single-cell atlas "
+        "(about 11 to 13 cell types and 400 to 500 genes).",
     ),
     "truth_region_spearman": (
-        "Truth region-pattern Spearman",
-        "Higher is better; compares reconstructed region averages with this embryo.",
+        "Match to this embryo's regions",
+        "Higher is better.",
+        "For each gene, the Spearman correlation between the reconstruction's 8 region averages and this "
+        "embryo's own measured region averages, averaged over genes.",
     ),
     "heldout_corr": (
-        "Held-out gene correlation",
-        "Higher is better; measured genes are excluded using the experiment log.",
+        "Accuracy on unmeasured genes",
+        "Higher is better.",
+        "For each gene, the Pearson correlation between reconstructed and true averages over neighbourhoods "
+        "of about 25 cells, using only neighbourhoods where that gene was not measured; averaged over genes.",
     ),
     "celltype_tv": (
-        "Cell-type proportion distance",
+        "Cell-type proportion error",
         "Lower is better.",
+        "A fixed classifier is trained on the reconstruction and predicts cell types on held-out sections. "
+        "This is the total variation distance between predicted and true cell-type proportions; 0 means identical.",
     ),
     "celltype_balanced_accuracy": (
-        "Cell-type balanced accuracy",
+        "Cell-type accuracy",
         "Higher is better.",
+        "Per-cell accuracy of that classifier, averaged over cell types so rare types count as much as common ones.",
     ),
 }
 
@@ -129,6 +141,36 @@ def evaluate_mouse_embryo_baseline(
     return _format_evaluation(summary, evaluator, len(measured_genes), len(log))
 
 
+def mouse_embryo_round_scorer(spatial_path: Path, reference_path: Path):
+    """Load the E7.5 benchmark once and return a function that scores a list of measured
+    genes the same way as evaluate_mouse_embryo_baseline, for scoring every round of a run."""
+    import anndata as ad
+
+    project_root = str(Path(__file__).resolve().parents[2])
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+    from eval_team.evaluate import Evaluator
+    from eval_team.submission import LOG_COLUMNS
+
+    truth = ad.read_h5ad(spatial_path)
+    missing_obs = sorted({"x", "y", "z", "celltype", "germ_layer"}.difference(truth.obs.columns))
+    if missing_obs:
+        raise ValueError(f"The E7.5 benchmark dataset is missing required obs columns: {', '.join(missing_obs)}")
+    visible = ad.read_h5ad(reference_path)
+    evaluator = Evaluator(truth)
+    available_genes = set(truth.var_names)
+
+    def score(measured_gene_ids: list[str]) -> dict[str, Any]:
+        measured_genes = list(dict.fromkeys(gene for gene in measured_gene_ids if gene in available_genes))
+        reconstruction = _cumulative_reconstruction(truth, visible, measured_genes)
+        log = _section_experiment_log(truth, measured_genes, LOG_COLUMNS)
+        summary, _ = evaluator.evaluate(reconstruction, log)
+        return _format_evaluation(summary, evaluator, len(measured_genes), len(log))
+
+    return score
+
+
 def run_eval_team_dummy_method(
     spatial_path: Path,
     reference_path: Path,
@@ -214,7 +256,7 @@ def _format_evaluation(
     experiment_count: int,
 ) -> dict[str, Any]:
     metrics = []
-    for metric_id, (label, description) in _METRIC_INFO.items():
+    for metric_id, (label, description, explanation) in _METRIC_INFO.items():
         value = summary.get(metric_id)
         if not isinstance(value, (int, float)) or not math.isfinite(value):
             continue
@@ -223,6 +265,7 @@ def _format_evaluation(
             "id": metric_id,
             "label": label,
             "description": description,
+            "explanation": explanation,
             "value": float(value),
             "true_data": float(true_data) if isinstance(true_data, (int, float)) and math.isfinite(true_data) else None,
         })
