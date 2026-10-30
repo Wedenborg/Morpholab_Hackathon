@@ -1,0 +1,80 @@
+# Real-data pilot: an E7.5 mouse embryo panel against the real candidate set D.
+#
+# Query  : Xie et al. 2025 Stereo-seq embryo E7.5 replicate 1 (GSE278603),
+#          reduced to a 4-gene panel plus 2D sagittal coordinates.
+# Spatial: the other five embryos of the same study (E7.5/E7.75/E8.0).
+# Single : Mittnenzweig et al. 2021 MARS-seq (GSE169210), split into a
+#          stage-matched (E7.5) and a deliberately stage-mismatched (E6.5)
+#          reference -- a built-in positive/negative control.
+# Causal : the Foxc1/Foxc2 double-knockout chimera arm of the same study.
+# Non-transcriptomic: ESM-2 sequence and STRING PPI embedding sources, which
+#          carry no cell x gene matrix and are correctly scored "not applicable".
+
+run_name: real_pilot_E7.5
+seed: 0
+outdir: outputs/real_pilot
+organism: mus_musculus
+data_dir: data
+
+candidates:
+  - seu3d_E7.5_rep2
+  - seu3d_E7.75_rep2
+  - seu3d_E8.0_rep1
+  - seu3d_E8.0_rep2
+  - mittnenzweig_wt_E7.5
+  - mittnenzweig_wt_E6.5
+  - mittnenzweig_foxc_dko
+  - esm2_protein
+  - string_ppi
+  - kegg_regulatory
+max_obs_per_dataset: 1500
+
+match_method: tfidf
+match_top_k: 0
+
+scores:
+  - avg_kl
+  - avg_js
+  - corr_frobenius
+  - corr_cosine
+  - ot_cluster_ari
+  - spatial_autocorr_frobenius
+  - spatial_corr_frobenius
+score_params:
+  ot_cluster_ari:
+    n_clusters: 5
+    max_obs: 800
+  # Stereo-seq and MARS-seq differ in detection rate by roughly 5x on this
+  # panel, which the distributional scores see as a distribution shift. Dropping
+  # the shared zero bin asks the question on detected cells only; the default
+  # (false) keeps the platform difference visible instead of hiding it.
+  avg_js:
+    drop_zero_bin: false
+allow_unit_mismatch: false
+
+embedders:
+  - pca_baseline
+  - ae_separate
+  - vae_separate
+  - joint_ae
+  - dcca
+  - contrastive_ae
+  - esm2_sequence
+  - string_ppi
+  - kegg_causal
+embedder_params:
+  # ESM-2 returns its native 480-dimensional representation, not `embedding_dim`.
+  # Set pca_dim so the sequence embedding is dimensionally comparable with the
+  # expression embedders when they are plotted or compared side by side.
+  esm2_sequence:
+    pca_dim: 32
+  # A cold KEGG run fetches 368 KGML files under the 3 req/s guidance (~4.5 min);
+  # every later call reads data/external/kegg/relations_mmu.tsv in under a second.
+  # max_pathways gives a reproducible fast prefix for smoke runs.
+  kegg_causal: {}
+embedding_dim: 32
+gene_universe: intersection   # joint methods need genes shared across datasets
+max_genes: 4000               # cap for a pilot-sized run; null = full transcriptome
+
+annotation_sources: [kegg, roles]
+offline: false
