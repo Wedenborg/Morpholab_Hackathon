@@ -1,11 +1,21 @@
 .vscode/
+.agents/
+.aws/
+.codex/
 frontend/node_modules/
 frontend/dist/
 backend/.venv/
+.venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 *.tsbuildinfo
 
-dataset/data/
+.prior_cache/
+
+dataset/data/*
+!dataset/data/download_starting_points.sh
 preprocessing/results/
+
+*.err
+*.out

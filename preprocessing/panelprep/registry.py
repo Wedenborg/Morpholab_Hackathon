@@ -6,6 +6,8 @@ you never edit this file.
 """
 from __future__ import annotations
 
+import hashlib
+
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator
 
@@ -60,3 +62,9 @@ class Registry:
         return pd.DataFrame(
             [{"name": e.name, **e.meta} for e in sorted(self._entries.values(), key=lambda e: e.name)]
         ).set_index("name") if self._entries else pd.DataFrame()
+
+
+def stable_seed(*parts) -> int:
+    """A process-independent integer seed for named methods and datasets."""
+    payload = repr(tuple(parts)).encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "little")

@@ -1,0 +1,54 @@
+# Python 3.11+. Install from the repository root: pip install -r requirements.txt
+
+# Shared scientific computing, preprocessing, and evaluation
+anndata>=0.12.7
+numpy>=2.0
+pandas>=2.2
+scipy>=1.14
+scikit-learn
+torch
+tqdm
+
+# Dataset readers, including Seurat RDS conversion without R
+readseurat==0.1.0
+scanpy
+h5py
+loompy
+tables
+treedata>=0.2.0
+
+# Biological priors: ontology, sequences, motifs, resource caching and pretrained models
+goatools>=1.6.8,<2
+gffutils>=0.14,<1
+biopython>=1.84,<2
+intervaltree>=3.1,<4
+pooch>=1.8,<2
+huggingface-hub>=0.23,<1
+requests>=2.31
+pyfaidx>=0.8
+transformers>=4.40,<5
+sentence-transformers>=3,<6
+
+# Panelprep scoring and embedding exports
+POT
+pyarrow
+pyyaml
+networkx
+umap-learn
+gensim
+jinja2
+
+# Notebook execution and plots
+ipykernel
+matplotlib
+seaborn
+
+# Backend API
+fastapi>=0.115
+pydantic>=2.0
+python-multipart>=0.0.20
+uvicorn[standard]>=0.34
+
+# Tests
+pytest>=8.3
+httpx>=0.28

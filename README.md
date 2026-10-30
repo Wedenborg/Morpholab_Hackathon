@@ -7,15 +7,20 @@ A local research prototype for preparing a gene panel for the next measurement r
 
 Requirements: Python 3.11+ and Node.js 20+ with npm.
 
-In one terminal, install and start the API:
+In one terminal, install the shared Python dependencies from the repository root
+and start the API:
 
 ```powershell
-cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+cd backend
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+The root `requirements.txt` covers the backend, dataset loaders, preprocessing,
+evaluation, tests, and Python notebook tools. Frontend dependencies are managed
+by `frontend/package.json` and npm.
 
 In a second terminal, install and start the React app:
 
