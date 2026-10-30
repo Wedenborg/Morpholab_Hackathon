@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+results/
+reference_cache/
+*.h5ad
+*.rds
+*.npz
+*.pt
+*.pth

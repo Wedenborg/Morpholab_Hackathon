@@ -1,0 +1,8 @@
+numpy
+scipy
+pandas
+anndata
+scanpy
+h5py
+torch
+scikit-learn
