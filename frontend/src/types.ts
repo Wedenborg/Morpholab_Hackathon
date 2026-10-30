@@ -68,9 +68,25 @@ export interface SelectedGene {
   score_provenance: string;
 }
 
+export type MethodId =
+  | "random-demo-v1"
+  | "rotating-markers-spatial"
+  | "rotating-markers-reference"
+  | "gaussian-information-spatial"
+  | "gaussian-information-reference";
+
+export interface EvaluationStep {
+  round: number;
+  genes: string[];
+  n_measured: number;
+  expected_share: number | null;
+  heldout_corr: number | null;
+}
+
 export interface SelectionResponse {
-  method: string;
+  method: MethodId;
   method_label: string;
+  score_label: string;
   seed: number;
   selected_genes: SelectedGene[];
   candidate_count: number;
@@ -86,6 +102,7 @@ export interface SelectionResponse {
     notice: string;
     metric: string;
     points: { round: number; value: number }[];
+    steps?: EvaluationStep[];
   };
   run_summary: Record<string, unknown>;
 }

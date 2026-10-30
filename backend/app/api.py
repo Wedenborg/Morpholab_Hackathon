@@ -14,7 +14,7 @@ import numpy as np
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import data_io
+from . import data_io, design_methods
 from .candidates import prepare_candidates
 from .data_io import MAX_UPLOAD_BYTES, MAX_UPLOAD_MB
 from .evaluation import evaluate_demo
@@ -28,7 +28,7 @@ from .models import (
     SelectionRequest,
     SelectionResponse,
 )
-from .selection import METHOD_ID, METHOD_LABEL, select_genes
+from .selection import METHODS, SCORE_LABELS, select_genes
 
 
 DATA_ROOT = Path(os.getenv("GENE_PANEL_DATA_DIR", Path(os.getenv("TEMP", "/tmp")) / "gene-panel-planner"))
@@ -305,6 +305,34 @@ def run_selection(request: SelectionRequest) -> SelectionResponse:
             detail=f"Requested {request.ng} genes, but only {len(pool.identifiers)} eligible genes remain.",
         )
     seed = request.seed if request.seed is not None else secrets.randbits(32)
+    if request.method != "random-demo-v1":
+        adata = ad.read_h5ad(spatial.path)
+        try:
+            data = design_methods.prepare(
+                adata, spatial.mapping.matrix_layer, spatial.gene_ids, spatial.coordinates,
+                spatial.mapping.cell_type_field,
+            )
+        finally:
+            del adata
+        if data.coordinates is None or data.coordinates.ndim != 2:
+            raise HTTPException(status_code=422, detail="This method needs spatial coordinates.")
+        reference_data = None
+        if request.method.endswith("-reference"):
+            ref_adata = ad.read_h5ad(reference.path)
+            try:
+                reference_data = design_methods.prepare_reference(
+                    ref_adata, reference.mapping.matrix_layer, reference.gene_ids,
+                    reference.mapping.cell_type_field, spatial.gene_ids,
+                )
+            finally:
+                del ref_adata
+            if not reference_data.found.any():
+                raise HTTPException(status_code=422, detail="No spatial gene identifiers match the reference dataset.")
+        selected, evaluation = design_methods.run(
+            request.method, data, reference_data, request.previous_genes, list(pool.identifiers), request.ng,
+            seed, pool.display_names, request.rounds,
+        )
+        return _selection_response(request, spatial, reference, pool, seed, selected, evaluation)
     evaluation_spatial = data_io.open_annotated(spatial.path)
     try:
         evaluation_reference = data_io.open_annotated(reference.path)
@@ -329,10 +357,15 @@ def run_selection(request: SelectionRequest) -> SelectionResponse:
             data_io.close_annotated(evaluation_reference)
     finally:
         data_io.close_annotated(evaluation_spatial)
+    return _selection_response(request, spatial, reference, pool, seed, selected, evaluation)
+
+
+def _selection_response(request, spatial, reference, pool, seed, selected, evaluation) -> SelectionResponse:
+    method_id, method_label = request.method, METHODS[request.method]
     overlap = len(set(spatial.gene_ids).intersection(reference.gene_ids))
     run_summary = {
-        "method": METHOD_ID,
-        "method_label": METHOD_LABEL,
+        "method": method_id,
+        "method_label": method_label,
         "seed": seed,
         "requested_count": request.ng,
         "candidate_count": len(spatial.gene_ids),
@@ -363,8 +396,9 @@ def run_selection(request: SelectionRequest) -> SelectionResponse:
         "evaluation": evaluation,
     }
     return SelectionResponse(
-        method=METHOD_ID,
-        method_label=METHOD_LABEL,
+        method=method_id,
+        method_label=method_label,
+        score_label=SCORE_LABELS[method_id],
         seed=seed,
         selected_genes=selected,
         candidate_count=len(spatial.gene_ids),

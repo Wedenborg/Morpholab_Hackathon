@@ -316,3 +316,13 @@ footer { display: flex; justify-content: space-between; max-width: 1120px; margi
   .chart-axis-label { left: -20px; font-size: 7px; }
   footer { padding: 0 14px 18px; gap: 12px; flex-wrap: wrap; }
 }
+
+.method-select { width: 100%; margin-bottom: 4px; border: 1px solid #dce4de; border-radius: 6px; padding: 9px 10px; color: #35514c; background: #fff; font-size: 11px; font-weight: 600; }
+.panel-settings > .field-heading { margin-top: 14px; }
+.chart-path-alt { stroke: #5f8a7d; stroke-dasharray: 4 3; }
+.chart-point-alt { stroke: #5f8a7d; }
+.chart-legend { display: flex; justify-content: center; gap: 16px; margin-top: 4px; color: #928876; font-size: 8px; }
+.chart-legend i { display: inline-block; width: 14px; height: 0; margin-right: 5px; vertical-align: middle; border-top: 2px solid #bb8d52; }
+.chart-legend .legend-alt i { border-top: 2px dashed #5f8a7d; }
+.steps-table td, .steps-table th { font-size: 9px; }
+.steps-genes { white-space: normal; min-width: 220px; color: #5d6f69; }

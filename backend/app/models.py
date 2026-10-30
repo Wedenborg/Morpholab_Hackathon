@@ -61,11 +61,22 @@ class MappingRequest(BaseModel):
     transpose: bool = False
 
 
+MethodId = Literal[
+    "random-demo-v1",
+    "rotating-markers-spatial",
+    "rotating-markers-reference",
+    "gaussian-information-spatial",
+    "gaussian-information-reference",
+]
+
+
 class SelectionRequest(BaseModel):
     session_id: str
     previous_genes: list[str] = Field(default_factory=list)
     ng: int = Field(strict=True, gt=0)
     seed: int | None = None
+    method: MethodId = "random-demo-v1"
+    rounds: int = Field(default=5, strict=True, ge=1, le=50)
 
 
 class CandidateRequest(BaseModel):
@@ -93,6 +104,7 @@ class SelectedGene(BaseModel):
 class SelectionResponse(BaseModel):
     method: str
     method_label: str
+    score_label: str = "Demo score"
     seed: int
     selected_genes: list[SelectedGene]
     candidate_count: int

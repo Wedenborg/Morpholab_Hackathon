@@ -67,6 +67,8 @@ export const api = {
     previous_genes: string[];
     ng: number;
     seed: number | null;
+    method: import("./types").MethodId;
+    rounds: number;
   }) =>
     request<SelectionResponse>("/api/select", {
       method: "POST",

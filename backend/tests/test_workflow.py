@@ -354,3 +354,43 @@ def test_expression_previews_use_real_values_and_report_missing_genes(client: Te
     assert len(reference["color_values"]) == 80
     assert unavailable["available"] is False
     assert "not present" in unavailable["message"]
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["rotating-markers-spatial", "rotating-markers-reference", "gaussian-information-spatial", "gaussian-information-reference"],
+)
+def test_model_methods_select_new_genes_and_score_every_round(client: TestClient, method: str) -> None:
+    example = client.post("/api/example").json()
+    previous_genes = example["previous_genes"].splitlines()
+    request = {"session_id": example["session_id"], "previous_genes": previous_genes, "ng": 3, "seed": 1,
+               "method": method, "rounds": 3}
+    first = client.post("/api/select", json=request)
+    second = client.post("/api/select", json=request)
+
+    assert first.status_code == 200, first.text
+    body = first.json()
+    genes = [gene["gene_id"] for gene in body["selected_genes"]]
+    assert len(genes) == len(set(genes)) == 3
+    assert not set(genes) & set(previous_genes)
+    assert genes == [gene["gene_id"] for gene in second.json()["selected_genes"]]
+    assert body["method"] == method
+    steps = body["evaluation"]["steps"]
+    assert [step["round"] for step in steps] == [0, 1, 2, 3]
+    assert steps[1]["genes"] == genes
+    assert [step["n_measured"] for step in steps] == [3, 6, 9, 12]
+    expected = [step["expected_share"] for step in steps]
+    assert expected == sorted(expected)
+    if method.endswith("-reference"):
+        assert all(gene.startswith("Gene-") and int(gene[5:]) <= 16 for step in steps for gene in step["genes"])
+
+
+def test_information_gain_scores_decrease_down_the_ranking(client: TestClient) -> None:
+    example = client.post("/api/example").json()
+    body = client.post(
+        "/api/select",
+        json={"session_id": example["session_id"], "ng": 6, "seed": 0, "method": "gaussian-information-spatial"},
+    ).json()
+    scores = [gene["score"] for gene in body["selected_genes"]]
+    assert all(score >= 0 for score in scores)
+    assert scores == sorted(scores, reverse=True)

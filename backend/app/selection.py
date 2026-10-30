@@ -39,3 +39,19 @@ def select_genes(
         )
         for index, (identifier, score) in enumerate(scored, start=1)
     ]
+
+
+METHODS = {
+    METHOD_ID: METHOD_LABEL,
+    "rotating-markers-spatial": "Rotating markers · spatial dataset",
+    "rotating-markers-reference": "Rotating markers · reference dataset",
+    "gaussian-information-spatial": "Information gain · factors from spatial dataset",
+    "gaussian-information-reference": "Information gain · factors from reference dataset",
+}
+SCORE_LABELS = {
+    METHOD_ID: "Demo score",
+    "rotating-markers-spatial": "Marker strength",
+    "rotating-markers-reference": "Marker strength",
+    "gaussian-information-spatial": "Information gain (nats)",
+    "gaussian-information-reference": "Information gain (nats)",
+}
