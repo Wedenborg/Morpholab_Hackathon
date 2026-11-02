@@ -1,0 +1,17 @@
+{
+  "reference_source": "auto",
+  "selection": "detected_hvg",
+  "top_k": 2000,
+  "detection_threshold_pct": 50.0,
+  "hvg_min_cells": 10,
+  "initial_genes": ["Sox2", "Hoxa1", "Hhex", "Pdx1"],
+  "rounds": 5,
+  "n_select": 4,
+  "seed": 42,
+  "batch_size": 256,
+  "mlp_layers": 2,
+  "mlp_hidden_dim": [128],
+  "mlp_epochs": 100,
+  "mlp_lr": 0.001,
+  "device": "cpu"
+}

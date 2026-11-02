@@ -46,7 +46,7 @@ import numpy as np
 import pandas as pd
 
 from ..normalize import resolve_genes, units_compatible
-from ..registry import Registry
+from ..registry import Registry, stable_seed
 from ..schemas import CandidateDataset, PanelQuery, ScoreResult
 
 SCORES = Registry("score")
@@ -177,7 +177,7 @@ def run_scores(
     for cand in candidates:
         for name in score_names:
             entry = SCORES[name]
-            rng = np.random.default_rng([seed, abs(hash(name)) % (2**31), abs(hash(cand.name)) % (2**31)])
+            rng = np.random.default_rng([seed, stable_seed(name), stable_seed(cand.name)])
             terminal = guard(query, cand, genes or query.panel, entry.meta, name,
                              allow_unit_mismatch=allow_unit_mismatch)
             if terminal is not None:

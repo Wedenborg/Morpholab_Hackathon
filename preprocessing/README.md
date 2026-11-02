@@ -5,8 +5,8 @@ experiment, score how much they agree with the measured panel, and build gene em
 whole transcriptome from four kinds of evidence.
 
 This is the `preprocessing/` folder of
-[Morpholab_Hackathon](https://github.com/Wedenborg/Morpholab_Hackathon). It sits alongside
-`dataset_selection.py` and does not change it — see
+[Morpholab_Hackathon](https://github.com/Wedenborg/Morpholab_Hackathon). It integrates with
+`dataset_selection.py` for reference selection and optional gene features — see
 [Merging into Morpholab_Hackathon](#merging-into-morpholab_hackathon) for how the two fit together
 and for the one decision to make before merging.
 
@@ -31,6 +31,107 @@ produces:
 | 2 | Separate and joint autoencoder gene embeddings per dataset | `panelprep/embed/expression.py`, `panelprep/embed/joint.py` |
 | 3 | Sequence (ESM-2), interaction (STRING) and literature (BioGPT) embeddings | `panelprep/embed/external.py`, `panelprep/priors/sources.py` |
 | 4 | Pathway membership and ligand / receptor / transcription-factor roles | `panelprep/annotate/` |
+
+## Reference selection and optional gene features
+
+`preprocessing.dataset_selection.select_dataset` now uses panelprep scores to
+choose a reference. Its default is `ot_cluster_ari` (higher is better), which
+matches cells in the measured panel space and compares cluster agreement.
+Other registered scores can be selected explicitly. Additional scores are
+reported without changing the selection rule. Full gene–gene similarity is
+computed only with `return_gene_similarity=True`.
+
+Run from the repository root in the environment with `requirements.txt` installed:
+
+```python
+from preprocessing.dataset_selection import select_dataset
+from preprocessing.reference_selection import available_embedding_methods
+
+# Omitted references use REFERENCE_DATASETS (currently TOME E7.5).
+result = select_dataset(query_adata, genes=PANEL, d=32, seed=42)
+
+# Search the shared data root; each discovered sample is a separate candidate.
+result = select_dataset(
+    query_adata,
+    genes=PANEL,
+    reference_datasets="/insomnia001/depts/morpheus/projects/hackathon/Datasets",
+    embedding_methods="all",    # or a list of method names; [] skips features
+    embedding_store="preprocessing/outputs/real_pilot/store",
+    joint_top_k=3,              # None uses all eligible references
+    d=32,
+    n_cells=800,
+    seed=42,
+    output_dir="preprocessing/results/reference_selection",
+)
+print(available_embedding_methods())
+print(result["ranking"])
+print(result["blocked_embeddings"])
+features = {name: emb.matrix for name, emb in result["embeddings"].items()}
+```
+
+References also accept a file, a local dataset name, AnnData, or a list of
+reference dictionaries, e.g. `[{"dataset": "tome", "timepoint": "7.5"},
+{"dataset": "tome", "timepoint": "7.75"}]`. Names resolve below `data_dir`,
+which defaults to the shared directory above. An explicit empty list is an
+error, not a request for defaults. No source downloads run during selection.
+The query's own file is excluded from reference candidates.
+
+Discovery prefers converted H5AD over duplicate RDS exports. Existing generic
+readers support H5AD, loom, H5TD, 10x and manifest-defined tables; built-in
+adapters additionally handle the local Pijuan-Sala sparse matrix and
+Mittnenzweig plates with cell metadata. R objects are copied into
+`preprocessing/results/reference_readers/` before conversion, preserving shared
+inputs. A reference dictionary can override `reader_cache_dir`. Conversion
+requires the existing reader dependencies and may be expensive. mdCLA's current
+CSV is metadata only, so it is reported as unavailable for scoring. Unknown
+formats require `dataset.json` using the reader schema in `dataset/load_dataset.py`.
+A manifest may set shared options under `reference_options`, and per-sample
+options include `units`, `layer`, `category`, `obs_unit`, and `expression_kind`.
+
+Known layers are `counts`, `logcounts` (natural log1p counts), and
+`logcounts_normalized` (log1p CP10K). The latter is preferred automatically.
+For other matrices declare `input_units` on the query or `units` in each
+reference dictionary: `counts`, `logcounts`, or `log1p_cp10k`. X is accepted
+without a unit declaration only when source log1p metadata, the SEU source
+convention, or matching stored count totals establishes its meaning. These
+checks do not establish that stored counts are original RNA counts. QC
+provenance is retained. Normalize on the complete source gene axis before panel
+restriction; no additional QC or panel-only library normalization is performed.
+
+The primary score's registered direction determines the winner. By default a
+candidate must use the full requested panel (`min_panel_coverage=1.0`), return
+`status="ok"`, and have a finite value. Ties use the candidate name. References
+are scored one at a time with at most `n_cells` observations each. Joint models
+reload only eligible views, optionally limited to `joint_top_k`. Raw formats
+and R conversions can still require loading a full sparse source matrix.
+
+All expression, external and prior registry names are selectable. Separate
+expression methods run on the winner; joint methods run on eligible ranked
+references and require at least two views. Every returned matrix follows
+`common_gene_names`, including the requested order of available
+`reference_genes`. Missing prior features remain NaN. Expensive external
+methods load from `embedding_store`; missing cache entries are blocked with a
+build instruction. Other prior sources use offline resources. Deferred or
+failed sources are recorded in `blocked_embeddings`, without replacing them
+with another method. `"all"` requests every method and can train several neural
+models; it does not guarantee every source is available. `embedder_params`
+passes per-method training options to expression embedders and prior sources.
+
+Outputs include the selected `reference`, raw `score`, `score_results`,
+`ranking`, `load_failures`, aligned `gene_log_counts`, `embeddings`, and
+`blocked_embeddings`. `loadings` remains an alias for the factor-analysis
+matrix when requested and successful. `output_dir` exports score/ranking CSVs,
+expression, embedding Parquets, an inventory with provenance, and selection
+status JSON. Expression methods return their effective dimension when it is
+smaller than `d`.
+
+```bash
+python -m preprocessing.dataset_selection query.h5ad --genes Sox2 T Bmp4 Foxa2 \
+  --references /insomnia001/depts/morpheus/projects/hackathon/Datasets \
+  --embedding-methods pca_baseline factor_analysis --d 32 --seed 42
+
+python -m pytest preprocessing/test_reference_selection.py -q
+```
 
 ## Install and run
 
@@ -65,8 +166,9 @@ Notebooks, in order:
 
 ## Merging into Morpholab_Hackathon
 
-The merge is **additive**. Nothing in `preprocessing/dataset_selection.py`,
-`dataset/load_dataset.py`, `backend/` or `eval_team/` has to change.
+The package was originally additive. The reference-selection integration above
+now updates `preprocessing/dataset_selection.py` and its `mouse_embryo.py` caller;
+`dataset/load_dataset.py`, `backend/` and `eval_team/` are unchanged.
 
 ### Where the files go
 
@@ -370,3 +472,14 @@ Stereo-seq query detects each gene in 8–22% of cells against 36–88% for MARS
 shifts every gene's marginal, so the distributional scores rank the *stage-mismatched* single-cell
 reference above the matched one while every structure-based score ranks them correctly. Read
 `corr_cosine` and `ot_cluster_ari` across platforms; read `avg_js` within one.
+
+
+## Biological-prior resources
+
+Retrieve and prepare all ten biological-prior families with:
+
+```bash
+python -m preprocessing.biological_priors.prepare_all
+```
+
+See [Biological-prior resource retrieval](biological_priors/README.md) for inputs, caching, model assets and retry commands.

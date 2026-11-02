@@ -100,7 +100,7 @@ def convert_gene_names(adata, data_dir=None, verbose=True):
             _download(url, partial, verbose)
             partial.replace(annotation)
         mapping = {}
-        with gzip.open(annotation, "rt") as handle:
+        with gzip.open(annotation, "rt", encoding="utf-8") as handle:
             for line in handle:
                 if line.startswith("#"):
                     continue
@@ -124,7 +124,7 @@ def _normalize(name):
 def _catalog():
     entries = {}
     current = None
-    for line in (ROOT / "Datasets.md").read_text().splitlines():
+    for line in (ROOT / "Datasets.md").read_text(encoding="utf-8").splitlines():
         match = re.match(r"### (\d+)\. (.+)", line) or re.match(r"\| (\d+) \| (.+?) \|", line)
         if match:
             current = int(match[1])
@@ -401,7 +401,7 @@ def _read_sample(folder, spec, verbose=True):
     if "spatial_columns" in spec:
         result.obsm["spatial"] = result.obs[spec["spatial_columns"]].to_numpy(dtype=float)
     if "newick" in spec:
-        result.uns["lineage_newick"] = (folder / spec["newick"]).read_text()
+        result.uns["lineage_newick"] = (folder / spec["newick"]).read_text(encoding="utf-8")
     return result
 
 
@@ -496,7 +496,7 @@ def iter_dataset(dataset_name="seu-3d", output="anndata", timepoint="all", data_
     folder.mkdir(parents=True, exist_ok=True)
     _log(f"Dataset: {name} | Timepoints: {'all' if requested is None else timepoint}\nDirectory: {folder}", verbose)
     manifest_path = folder / "dataset.json"
-    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
     samples = _select_timepoint(manifest.get("samples") or _discover(folder), requested)
     urls = manifest.get("downloads", DOWNLOADS.get(name, []))
     if requested is not None:
