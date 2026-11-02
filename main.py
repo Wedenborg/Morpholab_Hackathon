@@ -4,6 +4,11 @@ Each round recommends genes given what has been measured so far, then measures t
 on every section of the embryo through the logged MeasurementOracle.
 """
 import os
+import argparse
+import json
+
+import anndata as ad
+from scipy import sparse
 from pathlib import Path
 import time
 
@@ -11,9 +16,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from eval_team import load_e75_inputs, load_embryo, measure
+from eval_team import load_embryo, measure
 from gene_recommender import recommend_genes, ridge_impute
-from mouse_embryo import get_locations
 
 # Multiples of 4 fill every experiment, because one experiment measures at most 4 genes.
 ROUND_SIZES = (12, 8)
@@ -28,14 +32,35 @@ REFERENCE_REP = 2
 
 
 def main() -> None:
-    if not any(DATA_DIR.glob("*.h5ad")):
-        raise SystemExit(f"No .h5ad files in {DATA_DIR}. Download GSE278603_RAW or set MORPHO_DATA_DIR.")
-    inputs = load_e75_inputs(hidden_rep=TARGET_REP, visible_rep=REFERENCE_REP, data_dir=DATA_DIR)
-    oracle, gene_names, locations = inputs["oracle"], inputs["genes"], inputs["locations"]
-    gene_log_counts = inputs["gene_log_counts"]
-    sc_gene_log_counts = inputs["sc_gene_log_counts"]
-    reference = load_embryo(REFERENCE_REP, data_dir=DATA_DIR)
-    reference_locations = [get_locations(reference)]
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data-dir", type=Path, default=DATA_DIR)
+    parser.add_argument("--output", type=Path, default=Path("outputs/ridge"))
+    parser.add_argument("--round-sizes", type=int, nargs="+", default=list(ROUND_SIZES))
+    parser.add_argument("--max-cells", type=int, help="Limit cells per embryo for a smoke run")
+    parser.add_argument("--max-genes", type=int, help="Limit aligned genes for a smoke run")
+    args = parser.parse_args()
+    if any(k <= 0 for k in args.round_sizes) or any(v is not None and v <= 0 for v in (args.max_cells, args.max_genes)):
+        parser.error("Round sizes and data limits must be positive")
+    if args.output.exists():
+        parser.error("Output directory already exists; choose a new --output")
+    if not any(args.data_dir.glob("*.h5ad")):
+        raise SystemExit(f"No .h5ad files in {args.data_dir}. Download GSE278603_RAW or set MORPHO_DATA_DIR.")
+    # Subset before densifying: full embryos can require several GB per matrix.
+    hidden = load_embryo(TARGET_REP, data_dir=args.data_dir)
+    reference = load_embryo(REFERENCE_REP, data_dir=args.data_dir)
+    genes = hidden.var_names.intersection(reference.var_names, sort=False)
+    if args.max_genes:
+        genes = genes[:args.max_genes]
+    hidden = hidden[:args.max_cells, genes].copy()
+    reference = reference[:args.max_cells, genes].copy()
+    if sum(args.round_sizes) > len(genes):
+        parser.error("Requested panel exceeds the aligned gene count")
+    from eval_team.submission import MeasurementOracle
+    oracle, gene_names = MeasurementOracle(hidden), hidden.var_names
+    locations = torch.tensor(hidden.obs[["x", "y", "z"]].to_numpy(), dtype=torch.float32)
+    gene_log_counts = torch.zeros(hidden.shape, dtype=torch.float32)
+    sc_gene_log_counts = [torch.from_numpy(sparse.csr_matrix(reference.X).toarray().astype(np.float32))]
+    reference_locations = [torch.tensor(reference.obs[["x", "y", "z"]].to_numpy(), dtype=torch.float32)]
     cell_types = reference.obs["celltype"].astype(str).to_numpy()
     reference_labels = [torch.from_numpy(pd.factorize(cell_types)[0].astype(np.int64))]
 
@@ -45,7 +70,7 @@ def main() -> None:
     # Track measured genes explicitly, including genes whose expression is all zero.
     observed_mask = torch.zeros(len(gene_names), dtype=torch.bool)
 
-    for round_index, n_genes in enumerate(ROUND_SIZES):
+    for round_index, n_genes in enumerate(args.round_sizes):
         start = time.perf_counter()
         result = recommend_genes(
             n_genes_per_round=n_genes,
@@ -75,6 +100,15 @@ def main() -> None:
         sc_gene_log_counts, gene_log_counts, observed_mask, locations,
         reference_locations=reference_locations, spatial_neighbors=SPATIAL_NEIGHBORS,
     )
+    args.output.mkdir(parents=True)
+    reconstruction = ad.AnnData(imputed.detach().cpu().numpy(), obs=hidden.obs.copy(), var=hidden.var.copy())
+    reconstruction.write_h5ad(args.output / "reconstruction.h5ad")
+    oracle.log().to_csv(args.output / "experiments.csv", index=False)
+    mse = float(np.mean((reconstruction.X - sparse.csr_matrix(hidden.X).toarray()) ** 2))
+    summary = {"method": "ridge", "shape": list(hidden.shape), "measured_genes": int(observed_mask.sum()),
+               "experiments": len(oracle.log()), "reconstruction_mse": mse,
+               "note": "MSE includes measured genes; this is an execution check, not the held-out benchmark."}
+    (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(f"Measured {int(observed_mask.sum())} genes in {len(oracle.log())} experiments.")
     print(f"Imputed expression shape: {tuple(imputed.shape)}")
 

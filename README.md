@@ -1,4 +1,54 @@
 
+# Integrated hackathon workspace
+
+All team branches are merged into `integration/hackathon`, preserving their history.
+The default pipeline uses the greedy selector and ridge reconstruction in
+`gene_recommender.py`. Prediction quality has not been validated.
+
+Use Python 3.11+ and install from the repository root:
+
+On the cluster, run setup, tests, builds, and models inside a Slurm allocation;
+never execute compute work on the login node (see `AGENTS.md`). Submit the
+integrated checks with `MORPHO_DATA_DIR=/path/to/GSE278603_RAW sbatch --account=YOUR_ACCOUNT scripts/verify.slurm`.
+Set `MORPHO_PYTHON` to your environment's Python executable if needed.
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python main.py --data-dir /path/to/GSE278603_RAW --max-cells 300 --max-genes 200 --round-sizes 4 4 --output outputs/smoke
+```
+
+This aligns E7.5 rep1 (target) and rep2 (reference), selects genes, measures through
+the benchmark oracle, and writes `reconstruction.h5ad`, `experiments.csv`, and
+`summary.json`. Choose a new output directory for each run. Omit cell/gene limits
+for full-size runs, which require substantially more memory. `MORPHO_DATA_DIR`
+also sets the input location. Summary MSE includes measured genes and is only an
+execution check; see `eval_team/README.md` for held-out biological benchmarks.
+
+Other integrated implementations:
+
+- `active_design/`: Gaussian spatial factor design.
+- `active_acquisition.py`, `vae_panel.py`: VAE panel acquisition.
+- `methods/`: EDDI, PPCA, and linear imputation adapters.
+- `python -m haochen_method --help`: HVG selection and trained MLP reconstruction.
+- `preprocessing/`: panelprep, QC, reference selection, and biological priors.
+- `train_imputation.py`: experimental masked-expression MLP trainer.
+- `backend/`, `frontend/`: FastAPI and React interface with Gaussian design methods.
+
+Run checks with:
+
+```bash
+python -m pytest backend/tests eval_team haochen_method/tests test_active_acquisition.py test_vae_panel.py
+python -m pytest preprocessing/tests -m "not network and not slow"
+```
+
+Start the API with `python -m uvicorn backend.app.main:app` from the root.
+The frontend requires Node.js 20+: run `npm ci` and `npm run build` inside `frontend/`.
+Large reference datasets and biological-prior downloads are optional for the default runner.
+
+---
+
 # Fieldnote — Gene panel planner
 
 A local research prototype for preparing a gene panel for the next measurement round of a spatial transcriptomics experiment. The interface validates AnnData files, reports exact overlap, selects a reproducible random panel, and runs the repository's E7.5 reconstruction benchmark for the local mouse-embryo preset.

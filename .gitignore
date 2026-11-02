@@ -21,3 +21,7 @@ preprocessing/results/
 *.err
 *.out
 outputs/
+.venv*/
+.python-runtime/
+verification-*.out
+frontend-build-*.out
