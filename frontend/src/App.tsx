@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, errorTechnical } from "./api";
 import MappingPanel from "./components/MappingPanel";
 import ScatterPreview from "./components/ScatterPreview";
+import PrerunExplorer from "./components/PrerunExplorer";
 import type {
   DatasetKind,
   DatasetSummary,
@@ -35,6 +36,10 @@ const DESIGN_METHODS: Partial<Record<SelectionMethod, { label: string; note: str
     label: "Rotating markers · mdCLA",
     note: "Each cell subtype's next-best marker in turn, from mdCLA E7.5 single cells.",
   },
+  pca_tome: {
+    label: "PCA reconstruction · TOME scRNA",
+    note: "Each panel is chosen jointly so its genes best reconstruct TOME E7.5 single cells through their top principal components, given the genes already measured. Candidates are the reference embryo's most variable genes; the embryo is reconstructed with the reference embryo's factor model.",
+  },
 };
 
 const initialMapping = (kind: DatasetKind): MappingForm => ({
@@ -67,6 +72,7 @@ function selectionMethodFromValue(value: string): SelectionMethod {
     case "gaussian_mdcla":
     case "rotating_visible":
     case "rotating_mdcla":
+    case "pca_tome":
       return value;
     default:
       return "random";
@@ -1106,6 +1112,14 @@ export default function App() {
             </div>
           )}
         </section>
+        <section className="workflow-section prerun-section" id="prerun">
+          <div className="section-heading">
+            <div className="stage-number">04</div>
+            <div><div className="eyebrow">PRE-RUN COMPARISON</div><h2>How the methods improve over rounds</h2><p>Each method was simulated on the E7.5 mouse embryo with 4, 8 and 16 genes per round; every scored round reconstructs the embryo from all genes measured so far.</p></div>
+          </div>
+          <PrerunExplorer />
+        </section>
+
         <section className="about-demo" id="about">
           <span className="about-mark">i</span>
           <div><strong>About this prototype</strong><p>“Next round” means the next measurement round, not a prediction of biological change over time. The candidate universe is the spatial dataset’s selected gene identifiers; reference-only genes are not added. Gene-row scores are synthetic for the web random panel; the Gaussian methods report information gain and the rotating methods marker strength. For the local E7.5 preset, reconstruction metrics come from the repository’s eval_team benchmark; other datasets are not given fabricated evaluation scores.</p></div>

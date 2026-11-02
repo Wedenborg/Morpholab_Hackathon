@@ -2,7 +2,8 @@
 
 The output sits next to the input with the same stem, which load_dataset prefers over the
 .rds. X holds the counts and layers["logcounts"] the assay's normalised data slot, the
-layout load_dataset and preprocessing.dataset_selection expect for TOME.
+layout load_dataset and preprocessing.dataset_selection expect for TOME. Genes are named
+by symbol, with their original IDs in var["gene_id"].
 
 Usage:
     python dataset/convert_seurat_rds.py dataset/data/tome/seurat_object_E7.5.rds
@@ -17,6 +18,9 @@ import numpy as np
 import pandas as pd
 from rdata.parser import parse_file
 from scipy import sparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from dataset.load_dataset import convert_gene_names
 
 
 def _attributes(node) -> dict:
@@ -82,7 +86,7 @@ def convert(path: Path) -> Path:
         layers={"logcounts": logcounts.T.tocsr()},
     )
     output = path.with_suffix(".h5ad")
-    adata.write_h5ad(output)
+    convert_gene_names(adata).write_h5ad(output)
     return output
 
 

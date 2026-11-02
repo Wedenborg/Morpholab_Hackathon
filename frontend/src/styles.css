@@ -351,3 +351,17 @@ footer { display: flex; justify-content: space-between; max-width: 1120px; margi
 }
 .tip-mark { display: inline-grid; place-items: center; width: 11px; height: 11px; margin-left: 5px; border: 1px solid #b9c6c0; border-radius: 50%; color: #6f847d; font: 600 7px/1 "DM Sans", sans-serif; font-style: normal; vertical-align: 1px; }
 .steps-table th.has-tip { cursor: help; text-decoration: underline dotted #b9c6c0; }
+
+.prerun { display: grid; gap: 14px; }
+.prerun-controls { display: flex; flex-wrap: wrap; gap: 14px 26px; align-items: center; }
+.prerun-group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.prerun-group .eyebrow { margin-right: 4px; }
+.chip { border: 1px solid #d9dfd9; background: #fff; color: #44605b; border-radius: 999px; padding: 5px 11px; font: 600 11px Manrope, sans-serif; cursor: pointer; }
+.chip:hover { border-color: var(--teal); }
+.chip-on { background: var(--teal); border-color: var(--teal); color: #fff; }
+.prerun-chart svg { width: 100%; height: auto; display: block; }
+.prerun-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 10px; }
+.legend-item { display: inline-flex; align-items: center; gap: 7px; border: 0; background: none; cursor: pointer; font: 500 11px Manrope, sans-serif; color: var(--ink); padding: 2px 0; }
+.legend-item i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.legend-item strong { font-family: "DM Mono", monospace; font-size: 10px; color: var(--muted); }
+.legend-off { opacity: .35; }

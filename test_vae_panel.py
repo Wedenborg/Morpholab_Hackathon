@@ -127,7 +127,7 @@ class TrainVaeTest(unittest.TestCase):
     def test_vae_supports_selection(self):
         cells = modular_cells()
         split = int(0.8 * len(cells))
-        model = train_vae(cells[:split], cells[split:], latent=4, hidden=32, steps=600, warmup=200, log_every=600)
+        model = train_vae(cells[:split], cells[split:], latent=4, hidden=32, steps=2000, warmup=600, log_every=2000)
         scorer = PanelScorer(model.latent_decoder(), cells[:split], model.encode(cells[:split]),
                              cells[split:], cells[split:])
         none = torch.zeros(cells.shape[1], dtype=torch.bool)

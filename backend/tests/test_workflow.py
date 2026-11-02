@@ -645,6 +645,8 @@ def design_session(client: TestClient, tmp_path: Path, monkeypatch: pytest.Monke
     mdcla = _embryo(tmp_path / "mdcla.h5ad", rng, 240, genes[:25], counts=True, coords=False,
                     obs_extra={"level4_subtypes": np.repeat(["a", "b", "c"], 80)})
     monkeypatch.setattr(api, "MDCLA_PATH", mdcla)
+    tome = _embryo(tmp_path / "tome.h5ad", rng, 240, genes[:25], counts=True, coords=False)
+    monkeypatch.setattr(api, "TOME_PATH", tome)
     session_id = client.post("/api/sessions").json()["session_id"]
     for kind, path in (("spatial", target), ("reference", visible)):
         with path.open("rb") as handle:
@@ -657,7 +659,7 @@ def design_session(client: TestClient, tmp_path: Path, monkeypatch: pytest.Monke
     return session_id
 
 
-@pytest.mark.parametrize("method", ["gaussian_visible", "gaussian_mdcla", "rotating_visible", "rotating_mdcla"])
+@pytest.mark.parametrize("method", ["gaussian_visible", "gaussian_mdcla", "rotating_visible", "rotating_mdcla", "pca_tome"])
 def test_design_methods_select_new_genes_and_score_every_round(client: TestClient, design_session: str, method: str) -> None:
     previous = ["g00", "g01", "g02"]
     request = {"session_id": design_session, "previous_genes": previous, "ng": 3, "seed": 1, "method": method, "rounds": 3}
@@ -677,7 +679,7 @@ def test_design_methods_select_new_genes_and_score_every_round(client: TestClien
     assert [step["n_measured"] for step in steps] == [3, 6, 9, 12]
     expected = [step["expected_share"] for step in steps]
     assert expected == sorted(expected)
-    if method.endswith("mdcla"):
+    if method.endswith(("mdcla", "tome")):
         assert all(int(gene[1:]) < 25 for step in steps for gene in step["genes"])
 
 
@@ -689,6 +691,52 @@ def test_information_gain_scores_decrease_down_the_ranking(client: TestClient, d
     scores = [gene["score"] for gene in body["selected_genes"]]
     assert all(score >= 0 for score in scores)
     assert scores == sorted(scores, reverse=True)
+
+
+def _latent_source(n_cells: int = 2000):
+    """Twelve noisy genes: three copies each of independent a and b, six of (a + b) / sqrt(2)."""
+    from app import design_methods
+
+    rng = np.random.default_rng(0)
+    a, b = rng.normal(size=(2, n_cells, 1))
+    c = (a + b) / 2 ** 0.5
+    values = np.hstack([np.tile(a, 3), np.tile(b, 3), np.tile(c, 6)]) + 0.05 * rng.normal(size=(n_cells, 12))
+    values = (values - values.mean(0)) / values.std(0)
+    u, svals, _ = np.linalg.svd(values, full_matrices=False)
+    source = design_methods.LatentSource(values, u[:, :2] * svals[:2], np.arange(12), float((values ** 2).sum()), {})
+    return design_methods, source, np.ones(12)
+
+
+def _explained_directly(source, panel: list[int]) -> float:
+    """Latent variance explained by ridge regression on the panel's columns, from the cells."""
+    X = source.Y[:, panel]
+    gram = X.T @ X + 10.0 * np.eye(len(panel))
+    fitted = X @ np.linalg.solve(gram, X.T @ source.Z)
+    return float((source.Z ** 2).sum() - ((source.Z - fitted) ** 2).sum())
+
+
+def test_pca_panel_finds_the_best_pair_that_greedy_steps_miss() -> None:
+    from itertools import combinations
+
+    design_methods, source, variances = _latent_source()
+    picks = design_methods.latent_panel(source, [], list(range(12)), variances, 2)
+    genes = sorted(gene for gene, _, _ in picks)
+    best = max(combinations(range(12), 2), key=lambda pair: _explained_directly(source, list(pair)))
+    # A greedy start takes a copy of c; only the swaps can reach one copy each of a and b.
+    assert design_methods.latent_panel(source, [], list(range(12)), variances, 1)[0][0] >= 6
+    assert genes[0] < 3 <= genes[1] < 6
+    assert _explained_directly(source, genes) == pytest.approx(_explained_directly(source, list(best)), rel=1e-3)
+    assert all(score > 0 for _, score, _ in picks)
+
+
+def test_pca_panel_conditions_on_measured_genes_and_excludes_them() -> None:
+    design_methods, source, variances = _latent_source()
+    picks = design_methods.latent_panel(source, [0], list(range(12)), variances, 1)
+    # With a known, another copy of a adds almost nothing.
+    assert picks[0][0] not in (0, 1, 2)
+    excluded = design_methods.latent_panel(source, [], [g for g in range(12) if g >= 6], variances, 2)
+    assert all(gene >= 6 for gene, _, _ in excluded)
+    assert len({gene for gene, _, _ in excluded}) == 2
 
 
 def test_gaussian_reconstruction_keeps_measured_values_and_predicts_the_rest(tmp_path: Path) -> None:

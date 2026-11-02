@@ -8,7 +8,8 @@ export type SelectionMethod =
   | "gaussian_visible"
   | "gaussian_mdcla"
   | "rotating_visible"
-  | "rotating_mdcla";
+  | "rotating_mdcla"
+  | "pca_tome";
 
 export interface ValidationIssue {
   severity: "error" | "warning";

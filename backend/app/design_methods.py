@@ -20,6 +20,9 @@ neighbourhood; there are no sections to choose.
                        clusters), skipping genes already measured; each new round continues
                        with the next markers.
     rotating_mdcla     the same with mdCLA's cell subtypes.
+    pca_tome           the panel whose genes best reconstruct TOME E7.5 single cells through their
+                       top principal components, chosen jointly: greedy steps, then swaps until none
+                       helps. Candidates are the visible embryo's most variable genes.
 
 Each round is scored by the visible-embryo model's expected share of unmeasured genes'
 neighbourhood-level variance it predicts, and, when a scoring function is passed (the E7.5
@@ -48,14 +51,20 @@ MIN_DETECTION = 0.05       # candidate genes for the information design
 N_CANDIDATES = 2000
 EVAL_DETECTION = 0.02      # genes scored by the expected share
 SOURCE_DETECTION = 0.02    # genes used to place neighbourhoods on mdCLA factors
+LATENT_DIM = 32            # principal components the PCA panels reconstruct through
+LATENT_CANDIDATES = 1000
+LATENT_RIDGE = 10.0
+LATENT_MAX_PASSES = 3      # rounds of swaps per panel
 
 METHODS = {
     "gaussian_visible": ("information", "visible", "Gaussian information gain · visible embryo"),
     "gaussian_mdcla": ("information", "mdcla", "Gaussian information gain · mdCLA"),
     "rotating_visible": ("markers", "visible", "Rotating markers · visible embryo"),
     "rotating_mdcla": ("markers", "mdcla", "Rotating markers · mdCLA"),
+    "pca_tome": ("latent", "tome", "PCA reconstruction · TOME scRNA"),
 }
-SCORE_LABELS = {"information": "Information gain (nats)", "markers": "Marker strength"}
+SCORE_LABELS = {"information": "Information gain (nats)", "markers": "Marker strength",
+                "latent": "scRNA variance explained (%)"}
 
 
 @dataclass
@@ -128,6 +137,14 @@ def load_mdcla(path: Path, target_genes: list[str]) -> Expression:
         adata = adata[(adata.obs["level1_group"] == "Early embryo").to_numpy()]
     field = "level4_subtypes" if "level4_subtypes" in adata.obs else None
     return load_expression(adata, "X", list(map(str, adata.var_names)), target_genes, field)
+
+
+def load_tome(path: Path, target_genes: list[str]) -> "LatentSource":
+    """TOME single cells reduced for panel search; X holds counts, var_names gene symbols."""
+    import anndata as ad
+
+    adata = ad.read_h5ad(path)
+    return fit_latent(load_expression(adata, "X", list(map(str, adata.var_names)), target_genes, None))
 
 
 # ----------------------------------------------------------------------------- model
@@ -363,6 +380,103 @@ def marker_panel(X: sp.csr_matrix, labels: np.ndarray, names: list[str], measure
     return out
 
 
+@dataclass
+class LatentSource:
+    Y: np.ndarray                    # cells x modelled genes, z-scored log expression
+    Z: np.ndarray                    # cells x components, principal component scores
+    genes: np.ndarray                # target column of each modelled gene
+    total: float                     # sum of squares of Y
+    candidates: dict[bytes, tuple[np.ndarray, np.ndarray, np.ndarray]]  # the last pool's P, P'P and P'Z
+
+
+def fit_latent(source: Expression) -> LatentSource:
+    detect = np.asarray((source.X > 0).mean(0)).ravel()
+    genes = np.where(source.found & (detect >= EVAL_DETECTION))[0]
+    if len(genes) < 2:
+        raise ValueError("Too few target genes are detected in the single-cell reference.")
+    Y = source.X[:, genes].toarray()
+    Y = np.clip((Y - Y.mean(0)) / np.maximum(Y.std(0), 1e-3), -10, 10)
+    Y -= Y.mean(0)
+    u, svals, _ = svds(Y, k=min(LATENT_DIM, min(Y.shape) - 1), random_state=0)
+    return LatentSource(Y, u * svals, genes, float((Y ** 2).sum()), {})
+
+
+def _candidate_products(source: LatentSource, columns: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    key = columns.tobytes()
+    if key not in source.candidates:
+        source.candidates.clear()
+        P = source.Y[:, columns]
+        gram = (P.T @ P).astype(np.float64)
+        gram[np.diag_indices_from(gram)] += LATENT_RIDGE
+        source.candidates[key] = P, gram, P.T @ source.Z
+    return source.candidates[key]
+
+
+def latent_panel(source: LatentSource, measured: list[int], eligible: list[int], variances: np.ndarray, ng: int
+                 ) -> list[tuple[int, float, str]]:
+    """The ng eligible genes that jointly best reconstruct the source cells, given those measured.
+
+    A panel's cells predict the component scores by ridge regression. The decoder (the principal
+    directions) is orthonormal, so the fall in reconstruction error of all genes equals the score
+    variance explained, and adding a gene to a panel gains ||r_g||^2 / s_g with r_g and s_g its
+    cross-product with the scores and its own variance, both residual to the panel. Selection
+    therefore needs no pass over cells once the Gram matrices exist."""
+    modelled = np.full(len(variances), -1)
+    modelled[source.genes] = np.arange(len(source.genes))
+    # The pool is fixed for a source and embryo, so its products are computed once.
+    size = max(LATENT_CANDIDATES, ng + len(measured))
+    genes = np.sort(source.genes[np.argsort(-variances[source.genes], kind="stable")[:size]])
+    columns = modelled[genes]
+    P, R, r = _candidate_products(source, columns)
+    open_genes = np.isin(genes, eligible) & ~np.isin(genes, measured)
+    if not open_genes.any():
+        return []
+    chosen = modelled[[g for g in measured if modelled[g] >= 0]]
+    if len(chosen):
+        M = source.Y[:, chosen]
+        M_gram = M.T @ M
+        M_gram[np.diag_indices_from(M_gram)] += LATENT_RIDGE
+        cross = M.T @ P
+        solved = np.linalg.solve(M_gram, cross)
+        R = R - cross.T @ solved
+        r = r - solved.T @ (M.T @ source.Z)
+    diagonal = np.diag(R)
+
+    def gains(panel: list[int]) -> np.ndarray:
+        if panel:
+            solved = np.linalg.solve(R[np.ix_(panel, panel)], R[panel])
+            schur = np.maximum(diagonal - (R[panel] * solved).sum(0), 1e-9)
+            out = ((r - solved.T @ r[panel]) ** 2).sum(1) / schur
+            out[panel] = -np.inf
+        else:
+            out = (r ** 2).sum(1) / np.maximum(diagonal, 1e-9)
+        out[~open_genes] = -np.inf
+        return out
+
+    def explained(panel: list[int]) -> float:
+        return float((r[panel] * np.linalg.solve(R[np.ix_(panel, panel)], r[panel])).sum()) if panel else 0.0
+
+    panel: list[int] = []
+    for _ in range(min(ng, int(open_genes.sum()))):
+        panel.append(int(np.argmax(gains(panel))))
+    for _ in range(LATENT_MAX_PASSES if len(panel) > 1 else 0):
+        changed = False
+        for i in range(len(panel)):
+            rest = panel[:i] + panel[i + 1:]
+            candidate = gains(rest)
+            pick = int(np.argmax(candidate))
+            if pick != panel[i] and candidate[pick] > candidate[panel[i]] * (1 + 1e-9):
+                panel[i] = pick
+                changed = True
+        if not changed:
+            break
+    whole = explained(panel)
+    shares = [100 * (whole - explained(panel[:i] + panel[i + 1:])) / source.total for i in range(len(panel))]
+    order = np.argsort(-np.array(shares))
+    return [(int(genes[panel[i]]), float(shares[i]), "Share of TOME single-cell variance (%) lost if this gene "
+             "alone were left out of the panel, given the genes already measured.") for i in order]
+
+
 def cell_groups(X: sp.csr_matrix, cell_types: np.ndarray | None, seed: int) -> tuple[np.ndarray, list[str]]:
     """Cell types with enough cells, or, when there are none, k-means clusters of the cells'
     top principal components."""
@@ -405,16 +519,20 @@ def run(method: str, visible: Expression, mdcla: Expression | None, target_coord
         target_genes: list[str], previous: list[str], eligible_ids: list[str], ng: int, rounds: int,
         seed: int, display_names: dict[str, str],
         score_round: Callable[[list[str], FactorModel], dict[str, Any]] | None = None,
+        tome: LatentSource | None = None,
         ) -> tuple[list[SelectedGene], list[dict[str, Any]], dict[str, Any]]:
     """Select ng genes, then simulate rounds - 1 further rounds of the same method. Returns the
     selected genes, one record per round (round 0 = previous genes only) and model facts."""
     kind, source, _ = METHODS[method]
     if source == "mdcla" and mdcla is None:
         raise ValueError("This method needs the local mdCLA file.")
+    if source == "tome" and tome is None:
+        raise ValueError("This method needs the local TOME file.")
     model = fit(visible, target_coordinates, seed)          # also the yardstick for expected share
     # The method's own model: it chooses the information-gain genes and, for scoring, reconstructs
-    # the target from what was measured.
-    source_model = model if source == "visible" else fit(visible, target_coordinates, seed, mdcla)
+    # the target from what was measured. pca_tome only chooses genes, so it is reconstructed with
+    # the visible-embryo model.
+    source_model = model if source != "mdcla" else fit(visible, target_coordinates, seed, mdcla)
     pos = {g: i for i, g in enumerate(target_genes)}
     measured = sorted({pos[g] for g in previous if g in pos})
     eligible = [pos[g] for g in eligible_ids]
@@ -425,6 +543,12 @@ def run(method: str, visible: Expression, mdcla: Expression | None, target_coord
 
         def panel(already: list[int], allowed: list[int]) -> list[tuple[int, float, str]]:
             return information_panel(design_model, already, allowed, ng)
+    elif kind == "latent":
+        variances = (model.W ** 2).sum(1) + model.r
+        eligible = [g for g in eligible if visible.found[g]]
+
+        def panel(already: list[int], allowed: list[int]) -> list[tuple[int, float, str]]:
+            return latent_panel(tome, already, allowed, variances, ng)
     else:
         data = visible if source == "visible" else mdcla
         labels, names = cell_groups(data.X, data.cell_types, seed)
@@ -435,6 +559,8 @@ def run(method: str, visible: Expression, mdcla: Expression | None, target_coord
             return marker_panel(data.X, labels, names, already, allowed, ng, where)
 
     picks = panel(measured, eligible)
+    if not picks:
+        raise ValueError("No eligible gene is available to this method.")
     selected = [
         SelectedGene(gene_id=target_genes[g], display_name=display_names.get(target_genes[g], target_genes[g]),
                      rank=i, score=score, score_provenance=why)

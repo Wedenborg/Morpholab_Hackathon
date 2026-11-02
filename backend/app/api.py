@@ -45,7 +45,9 @@ MOUSE_EMBRYO_DATA_DIR = Path(
 )
 MOUSE_EMBRYO_PREVIOUS_GENES = ["Fth1", "Rpl8", "Eif5a", "Cox7c"]
 MDCLA_PATH = Path(os.getenv("MDCLA_PATH", PROJECT_ROOT.parent / "reference_data" / "mdcla" / "mdCLA_E7.5.h5ad"))
+TOME_PATH = Path(os.getenv("TOME_PATH", PROJECT_ROOT / "dataset" / "data" / "tome" / "seurat_object_E7.5.h5ad"))
 _mdcla_cache: dict[tuple[str, int, int], design_methods.Expression] = {}
+_tome_cache: dict[tuple[str, int, int], design_methods.LatentSource] = {}
 DUMMY_METHODS = {
     "dummy_markers": ("markers", "Dummy markers · nearest-neighbour reconstruction"),
     "dummy_variance": ("variance", "Dummy variable genes · nearest-neighbour reconstruction"),
@@ -359,6 +361,16 @@ def _mdcla(target_genes: list[str]) -> design_methods.Expression:
     return _mdcla_cache[key]
 
 
+def _tome(target_genes: list[str]) -> design_methods.LatentSource:
+    if not TOME_PATH.is_file():
+        raise HTTPException(status_code=503, detail=f"The TOME file is unavailable; set TOME_PATH. Missing: {TOME_PATH}")
+    key = (str(TOME_PATH), len(target_genes), hash(tuple(target_genes)))
+    if key not in _tome_cache:
+        _tome_cache.clear()
+        _tome_cache[key] = design_methods.load_tome(TOME_PATH, target_genes)
+    return _tome_cache[key]
+
+
 def _run_design_method(request: SelectionRequest, state: SessionState, spatial: DatasetFile,
                        reference: DatasetFile, pool: Any, seed: int) -> tuple[list[SelectedGene], dict[str, Any]]:
     if spatial.coordinates is None:
@@ -372,6 +384,7 @@ def _run_design_method(request: SelectionRequest, state: SessionState, spatial: 
     if not visible.found.any():
         raise HTTPException(status_code=422, detail="No spatial gene identifiers match the reference dataset.")
     mdcla = _mdcla(spatial.gene_ids) if design_methods.METHODS[request.method][1] == "mdcla" else None
+    tome = _tome(spatial.gene_ids) if design_methods.METHODS[request.method][1] == "tome" else None
     scorer = None
     if _benchmark_ready(state, spatial):
         # Each round is reconstructed with the method's own Gaussian posterior, then scored.
@@ -383,7 +396,7 @@ def _run_design_method(request: SelectionRequest, state: SessionState, spatial: 
         selected, steps, facts = design_methods.run(
             request.method, visible, mdcla, np.asarray(spatial.coordinates, float), spatial.gene_ids,
             request.previous_genes, list(pool.identifiers), request.ng, request.rounds, seed,
-            pool.display_names, scorer,
+            pool.display_names, scorer, tome,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

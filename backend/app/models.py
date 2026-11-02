@@ -66,7 +66,7 @@ class SelectionRequest(BaseModel):
     previous_genes: list[str] = Field(default_factory=list)
     method: Literal[
         "random", "dummy_markers", "dummy_variance", "dummy_random", "manual",
-        "gaussian_visible", "gaussian_mdcla", "rotating_visible", "rotating_mdcla",
+        "gaussian_visible", "gaussian_mdcla", "rotating_visible", "rotating_mdcla", "pca_tome",
     ] = "random"
     chosen_genes: list[str] = Field(default_factory=list)
     ng: int = Field(strict=True, gt=0)
