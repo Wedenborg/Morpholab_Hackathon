@@ -37,7 +37,7 @@ import numpy as np
 import pandas as pd
 
 from ..normalize import resolve_genes
-from ..registry import Registry
+from ..registry import Registry, stable_seed
 from ..schemas import CandidateDataset, GeneEmbedding
 
 EMBEDDERS = Registry("embedder")
@@ -127,7 +127,7 @@ def run_embedders(
         if max_obs is not None:
             kw.setdefault("max_obs", max_obs)
         mode = entry.meta.get("mode", "joint")
-        rng = np.random.default_rng([seed, abs(hash(name)) % (2**31)])
+        rng = np.random.default_rng([seed, stable_seed(name)])
         if mode == "separate":
             usable = {k: v for k, v in datasets.items() if v.has_expression}
             for dname, ds in usable.items():
